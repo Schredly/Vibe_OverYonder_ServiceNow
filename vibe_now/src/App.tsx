@@ -11,6 +11,8 @@ import { PrototypeViewer } from './components/PrototypeViewer';
 import { SettingsModal } from './components/SettingsModal';
 import { CostAnalyticsModal } from './components/CostAnalyticsModal';
 import { OpenPackageModal, type OpenPackagePayload } from './components/OpenPackageModal';
+import { PushToGitHubModal } from './components/PushToGitHubModal';
+import type { GitHubPushResult } from './lib/apiClient';
 import {
   renderTurn,
   generateEchoReply as behaviorEchoReply,
@@ -211,6 +213,10 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [showCostAnalytics, setShowCostAnalytics] = useState(false);
   const [showOpenPackage, setShowOpenPackage] = useState(false);
+  // Push-to-GitHub modal state. Triggered by the project-row kebab menu.
+  // `pushTargetProjectId` opens the modal for that specific project; null
+  // closes it.
+  const [pushTargetProjectId, setPushTargetProjectId] = useState<string | null>(null);
   const [backendOnline, setBackendOnline] = useState<boolean | null>(null);
 
   useEffect(() => {
@@ -1439,6 +1445,20 @@ export default function App() {
           onOpenSettings={() => setShowSettings(true)}
           onOpenCostAnalytics={() => setShowCostAnalytics(true)}
           onOpenPackage={() => setShowOpenPackage(true)}
+          onProjectPushToGithub={(id) => setPushTargetProjectId(id)}
+          onProjectUnlinkGithub={(id) => {
+            // Local-only: drop the storage record so the chip flips back
+            // to "Local" + the kebab shows the push option again. The
+            // remote repo on GitHub is untouched.
+            setProjects((prev) =>
+              prev.map((p) => (p.id === id ? { ...p, storage: { type: 'local' } } : p)),
+            );
+          }}
+          onProjectSwitchToLocal={(id) => {
+            setProjects((prev) =>
+              prev.map((p) => (p.id === id ? { ...p, storage: { type: 'local' } } : p)),
+            );
+          }}
         />
       )}
       <Workspace
@@ -1720,6 +1740,42 @@ export default function App() {
         isOpen={showOpenPackage}
         onClose={() => setShowOpenPackage(false)}
         onImported={handlePackageImported}
+        onOpenSettings={() => setShowSettings(true)}
+      />
+
+      <PushToGitHubModal
+        isOpen={pushTargetProjectId !== null}
+        onClose={() => setPushTargetProjectId(null)}
+        projectId={pushTargetProjectId}
+        projectName={
+          projects.find((p) => p.id === pushTargetProjectId)?.name ?? null
+        }
+        initialRepoUrl={
+          projects.find((p) => p.id === pushTargetProjectId)?.storage?.repoPath
+            ? `https://github.com/${projects.find((p) => p.id === pushTargetProjectId)?.storage?.repoPath}`
+            : undefined
+        }
+        onOpenSettings={() => setShowSettings(true)}
+        onPushed={(result: GitHubPushResult) => {
+          // Promote the project's storage chip from Local → linked GitHub.
+          // Persisted only in browser state for now — the backend records
+          // the push in the build/version log; a follow-up adds a
+          // `github_repo_url` column on `projects` so reloads remember.
+          setProjects((prev) =>
+            prev.map((p) =>
+              p.id === pushTargetProjectId
+                ? {
+                    ...p,
+                    storage: {
+                      type: 'github',
+                      repoPath: result.ownerRepo,
+                    },
+                    lastModified: 'Just now',
+                  }
+                : p,
+            ),
+          );
+        }}
       />
 
       <Modal

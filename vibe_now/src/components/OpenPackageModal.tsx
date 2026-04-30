@@ -20,18 +20,26 @@ import {
   RefreshCw,
   Search,
   ChevronDown,
+  ChevronRight,
+  Github,
+  ArrowLeft,
+  FileText,
 } from 'lucide-react';
 import { Modal } from './Modal';
 import { Button } from './Button';
 import { Input } from './Input';
 import {
   branchPackage,
+  browseGitHubRepo,
   discoverPackages,
+  fetchGitHubCredential,
   importPackage,
+  importPackageFromGitHub,
   ingestPackage,
   inspectPackagePath,
   type DiscoveredPackage,
   type DiscoveredRoot,
+  type GitHubBrowseEntry,
   type ImportedPackage,
   type PackageIngestResult,
 } from '../lib/apiClient';
@@ -51,6 +59,21 @@ interface OpenPackageModalProps {
   /** Called after the full open pipeline lands (import → ingest → optional
    *  branch). The frontend uses this to seed a Project from the result. */
   onImported: (payload: OpenPackagePayload) => void;
+  /** Click handler that opens Settings → GitHub. Used when no default repo
+   *  URL is configured (the prerequisite for the Browse picker). */
+  onOpenSettings?: () => void;
+}
+
+// Read the default repo URL the user configured in Settings → GitHub.
+// This is the source of truth for the "Browse from GitHub" picker — we
+// never re-prompt for a URL inside the Open modal.
+function readDefaultRepoUrl(): string | null {
+  try {
+    const v = (localStorage.getItem('vibe.github.defaultRepoUrl') ?? '').trim();
+    return v || null;
+  } catch {
+    return null;
+  }
 }
 
 type IntentMode = 'continue' | 'branch';
@@ -86,6 +109,7 @@ export function OpenPackageModal({
   isOpen,
   onClose,
   onImported,
+  onOpenSettings,
 }: OpenPackageModalProps) {
   const [roots, setRoots] = useState<DiscoveredRoot[]>([]);
   const [loading, setLoading] = useState(false);
@@ -97,6 +121,20 @@ export function OpenPackageModal({
   const [customPath, setCustomPath] = useState('');
   const [customError, setCustomError] = useState<string | null>(null);
   const [intent, setIntent] = useState<IntentMode>('continue');
+
+  // GitHub picker state. Three layers:
+  //   - default repo URL (from Settings; null → render "configure" CTA)
+  //   - hasToken (so we can warn when private repos won't work)
+  //   - browser stack: each entry is { path, entries } so the user can drill
+  //     in (project folder → version) and back out without refetching the
+  //     parent. The current view is always stack[stack.length - 1].
+  const [defaultRepoUrl, setDefaultRepoUrl] = useState<string | null>(null);
+  const [hasGitHubToken, setHasGitHubToken] = useState(false);
+  const [githubStack, setGithubStack] = useState<
+    Array<{ path: string; entries: GitHubBrowseEntry[] }>
+  >([]);
+  const [githubLoading, setGithubLoading] = useState(false);
+  const [githubError, setGithubError] = useState<string | null>(null);
 
   const refresh = async () => {
     setLoading(true);
@@ -121,8 +159,48 @@ export function OpenPackageModal({
       setCustomPath('');
       setCustomError(null);
       setIntent('continue');
+      setGithubError(null);
+      setGithubStack([]);
+      const url = readDefaultRepoUrl();
+      setDefaultRepoUrl(url);
+      void (async () => {
+        try {
+          const cred = await fetchGitHubCredential();
+          setHasGitHubToken(cred.hasToken);
+        } catch {
+          setHasGitHubToken(false);
+        }
+      })();
+      // Auto-load the top level of the default repo so the user lands
+      // straight on the project list — no extra click required.
+      if (url) void browseAt(url, '');
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
+
+  const browseAt = async (repoUrl: string, path: string) => {
+    setGithubError(null);
+    setGithubLoading(true);
+    try {
+      const res = await browseGitHubRepo(repoUrl, path || undefined);
+      setGithubStack((prev) => {
+        // Replace the current path's entry if it's the same level, else push.
+        const top = prev[prev.length - 1];
+        if (top && top.path === path) {
+          return [...prev.slice(0, -1), { path, entries: res.entries }];
+        }
+        return [...prev, { path, entries: res.entries }];
+      });
+    } catch (err) {
+      setGithubError((err as Error).message ?? 'browse failed');
+    } finally {
+      setGithubLoading(false);
+    }
+  };
+
+  const goUp = () => {
+    setGithubStack((prev) => prev.slice(0, -1));
+  };
 
   // Filtered + flattened view for the search-across-all-roots case. We keep
   // grouping in the rendered UI when there's no search; flatten when the
@@ -219,6 +297,66 @@ export function OpenPackageModal({
       // Don't auto-import — gives them a chance to confirm what was found.
     } catch (err) {
       setCustomError((err as Error).message ?? 'path is not a Now SDK package');
+    }
+  };
+
+  // Pick-folder-from-default-repo path. Same import → ingest → optional-branch
+  // pipeline as local imports, sourced from a subpath inside the default
+  // repo configured in Settings → GitHub. The backend clones the repo
+  // and treats <subPath> as the package root.
+  const handleGitHubImport = async (subPath: string) => {
+    setGithubError(null);
+    if (!defaultRepoUrl) {
+      setGithubError('Set a default repo URL in Settings → GitHub first.');
+      return;
+    }
+    const sourceLabel = `${defaultRepoUrl}/${subPath}`;
+    setPhase({ phase: 'importing', sourcePath: sourceLabel });
+    try {
+      const imported = await importPackageFromGitHub({
+        repoUrl: defaultRepoUrl,
+        subPath,
+      });
+
+      setPhase({ phase: 'ingesting', sourcePath: imported.metadata.path });
+      let ingest: PackageIngestResult | null = null;
+      try {
+        ingest = await ingestPackage(imported.project.id);
+      } catch (err) {
+        console.warn('package ingest failed (project still opened)', err);
+      }
+
+      let branched = false;
+      let branchedToVersion: number | undefined;
+      if (intent === 'branch') {
+        setPhase({ phase: 'branching', sourcePath: imported.metadata.path });
+        try {
+          const result = await branchPackage(
+            imported.project.id,
+            'Branched at open — fresh starting point',
+          );
+          branched = true;
+          branchedToVersion = result.version.version_number;
+        } catch (err) {
+          console.warn('branch failed (continuing on v1)', err);
+        }
+      }
+
+      const payload: OpenPackagePayload = {
+        imported,
+        ingest,
+        branched,
+        branchedToVersion,
+      };
+      setPhase({ phase: 'done', payload });
+      setTimeout(() => {
+        onImported(payload);
+        onClose();
+      }, 600);
+    } catch (err) {
+      const msg = (err as Error).message ?? 'github import failed';
+      setGithubError(msg);
+      setPhase({ phase: 'failed', message: msg });
     }
   };
 
@@ -375,6 +513,26 @@ export function OpenPackageModal({
           </button>
         </div>
 
+        <GitHubBrowsePanel
+          defaultRepoUrl={defaultRepoUrl}
+          hasToken={hasGitHubToken}
+          stack={githubStack}
+          loading={githubLoading}
+          error={githubError}
+          inFlight={inFlight}
+          onBrowse={(path) => defaultRepoUrl && void browseAt(defaultRepoUrl, path)}
+          onUp={goUp}
+          onImportFolder={(path) => void handleGitHubImport(path)}
+          onOpenSettings={
+            onOpenSettings
+              ? () => {
+                  onClose();
+                  onOpenSettings();
+                }
+              : undefined
+          }
+        />
+
         <div className="space-y-5 max-h-[440px] overflow-y-auto pr-1">
           {filteredRoots.map((root) => (
             <RootSection
@@ -442,6 +600,198 @@ export function OpenPackageModal({
         </div>
       </div>
     </Modal>
+  );
+}
+
+// Pretty-printed `<owner>/<repo>` derived from a github URL. Used by the
+// browse panel header so the user always sees which repo they're walking.
+function ownerRepoFromUrl(url: string): string {
+  return url.replace(/^https?:\/\/[^/]+\//i, '').replace(/\.git$/i, '');
+}
+
+interface GitHubBrowsePanelProps {
+  defaultRepoUrl: string | null;
+  hasToken: boolean;
+  stack: Array<{ path: string; entries: GitHubBrowseEntry[] }>;
+  loading: boolean;
+  error: string | null;
+  inFlight: boolean;
+  onBrowse: (path: string) => void;
+  onUp: () => void;
+  onImportFolder: (path: string) => void;
+  onOpenSettings?: () => void;
+}
+
+function GitHubBrowsePanel({
+  defaultRepoUrl,
+  hasToken,
+  stack,
+  loading,
+  error,
+  inFlight,
+  onBrowse,
+  onUp,
+  onImportFolder,
+  onOpenSettings,
+}: GitHubBrowsePanelProps) {
+  const current = stack[stack.length - 1];
+  const breadcrumbs = current ? current.path.split('/').filter(Boolean) : [];
+  const isPackageFolder = (entries: GitHubBrowseEntry[]): boolean =>
+    entries.some((e) => e.type === 'file' && e.name === 'now.config.json');
+
+  return (
+    <div className="rounded-[var(--radius-md)] border border-[var(--border-subtle)] bg-[var(--bg-hover)]/40 p-3">
+      <div className="flex items-center gap-2 mb-2">
+        <Github className="w-4 h-4 text-[var(--text-primary)]" />
+        <h3 className="text-[var(--text-sm)] font-semibold text-[var(--text-primary)]">
+          Open from GitHub
+        </h3>
+        {defaultRepoUrl && (
+          <span className="text-[var(--text-xs)] text-[var(--text-tertiary)] font-mono">
+            {ownerRepoFromUrl(defaultRepoUrl)}
+          </span>
+        )}
+      </div>
+
+      {!defaultRepoUrl ? (
+        <div className="text-[var(--text-xs)] text-[var(--text-secondary)] leading-relaxed">
+          Set a <strong>Default repo URL</strong> in Settings → GitHub. The
+          browser lists every project folder in that repo and lets you pick a
+          version to load.
+          {onOpenSettings && (
+            <div className="mt-2">
+              <Button variant="secondary" size="sm" onClick={onOpenSettings}>
+                Open Settings
+              </Button>
+            </div>
+          )}
+        </div>
+      ) : (
+        <>
+          {!hasToken && (
+            <p className="text-[var(--text-xs)] text-[var(--warning-text,var(--text-secondary))] mb-2 leading-relaxed">
+              No PAT on file. Public repos work; private repos need a token in
+              Settings → GitHub.
+            </p>
+          )}
+          <div className="flex items-center gap-1 mb-2 text-[var(--text-xs)] text-[var(--text-tertiary)] flex-wrap">
+            <button
+              type="button"
+              onClick={() => onBrowse('')}
+              className="hover:text-[var(--text-primary)] hover:underline"
+              disabled={inFlight || loading}
+            >
+              {ownerRepoFromUrl(defaultRepoUrl)}
+            </button>
+            {breadcrumbs.map((seg, i) => {
+              const path = breadcrumbs.slice(0, i + 1).join('/');
+              return (
+                <span key={path} className="inline-flex items-center gap-1">
+                  <ChevronRight className="w-3 h-3" />
+                  <button
+                    type="button"
+                    onClick={() => onBrowse(path)}
+                    className="hover:text-[var(--text-primary)] hover:underline font-mono"
+                    disabled={inFlight || loading}
+                  >
+                    {seg}
+                  </button>
+                </span>
+              );
+            })}
+          </div>
+
+          {stack.length > 1 && (
+            <button
+              type="button"
+              onClick={onUp}
+              disabled={inFlight || loading}
+              className="inline-flex items-center gap-1 text-[var(--text-xs)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] mb-2"
+            >
+              <ArrowLeft className="w-3 h-3" /> Back
+            </button>
+          )}
+
+          <div className="rounded-[var(--radius-sm)] border border-[var(--border-subtle)] bg-[var(--bg-card)] max-h-[180px] overflow-y-auto">
+            {loading && (
+              <div className="px-3 py-3 text-[var(--text-xs)] text-[var(--text-tertiary)] inline-flex items-center gap-2">
+                <Loader2 className="w-3.5 h-3.5 animate-[spin_1s_linear_infinite]" />
+                Loading…
+              </div>
+            )}
+            {!loading && current && current.entries.length === 0 && (
+              <div className="px-3 py-3 text-[var(--text-xs)] text-[var(--text-tertiary)]">
+                Empty folder.
+              </div>
+            )}
+            {!loading &&
+              current &&
+              current.entries.map((entry) => {
+                const isDir = entry.type === 'dir';
+                return (
+                  <div
+                    key={entry.path}
+                    className="flex items-center gap-2 px-3 py-2 border-b border-[var(--border-subtle)] last:border-b-0 hover:bg-[var(--bg-hover)]/60"
+                  >
+                    {isDir ? (
+                      <Folder className="w-3.5 h-3.5 text-[var(--text-tertiary)] shrink-0" />
+                    ) : (
+                      <FileText className="w-3.5 h-3.5 text-[var(--text-tertiary)] shrink-0" />
+                    )}
+                    <button
+                      type="button"
+                      disabled={!isDir || inFlight || loading}
+                      onClick={() => isDir && onBrowse(entry.path)}
+                      onDoubleClick={() => isDir && onBrowse(entry.path)}
+                      className={`flex-1 text-left text-[var(--text-xs)] font-mono truncate ${
+                        isDir
+                          ? 'text-[var(--text-primary)] hover:text-[var(--primary)]'
+                          : 'text-[var(--text-tertiary)] cursor-default'
+                      }`}
+                    >
+                      {entry.name}
+                      {isDir ? '/' : ''}
+                    </button>
+                    {isDir && (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        disabled={inFlight || loading}
+                        onClick={() => onImportFolder(entry.path)}
+                      >
+                        Open this
+                      </Button>
+                    )}
+                  </div>
+                );
+              })}
+          </div>
+
+          {/* When the current folder itself is a package (now.config.json
+              present), surface a "Open this folder" CTA so the user
+              doesn't have to back out and re-pick the parent. */}
+          {current && isPackageFolder(current.entries) && current.path && (
+            <div className="mt-2 flex justify-end">
+              <Button
+                variant="primary"
+                size="sm"
+                disabled={inFlight || loading}
+                onClick={() => onImportFolder(current.path)}
+                icon={<FolderOpen className="w-3.5 h-3.5" />}
+              >
+                Open <span className="font-mono">{current.path}</span>
+              </Button>
+            </div>
+          )}
+
+          {error && (
+            <p className="text-[var(--text-xs)] text-[var(--danger-text)] mt-2">
+              {error}
+            </p>
+          )}
+        </>
+      )}
+    </div>
   );
 }
 

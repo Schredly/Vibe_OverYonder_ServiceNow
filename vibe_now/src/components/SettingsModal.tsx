@@ -15,6 +15,7 @@ import {
   CheckCircle2,
   AlertTriangle,
   XCircle,
+  Github,
 } from 'lucide-react';
 import { Modal } from './Modal';
 import { Button } from './Button';
@@ -46,6 +47,12 @@ import {
   type LlmTestResult,
 } from '../lib/llmConfig';
 import type { AuthAlias, ConsultantMode } from '../types';
+import {
+  clearGitHubCredential,
+  fetchGitHubCredential,
+  saveGitHubCredential,
+  testGitHubCredential,
+} from '../lib/apiClient';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -563,6 +570,8 @@ export function SettingsModal({
           )}
         </section>
 
+        <GitHubSection />
+
         <section>
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-[var(--text-xs)] font-semibold text-[var(--text-tertiary)] uppercase tracking-wider">
@@ -867,5 +876,339 @@ function Checkbox({ id, checked, onChange, label, hint }: CheckboxProps) {
         )}
       </div>
     </label>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// GitHub section. PAT + repo target live here (the per-project right-panel
+// Storage card was removed on 2026-04-30 — config is consolidated, push is
+// triggered from the kebab on each project row). Token is AES-256-GCM
+// encrypted server-side under VIBE_MASTER_KEY (same crypto as ServiceNow
+// alias passwords and LLM keys).
+// ---------------------------------------------------------------------------
+
+const GH_DEFAULT_OWNER_KEY = 'vibe.github.defaultOwner';
+const GH_DEFAULT_REPO_URL_KEY = 'vibe.github.defaultRepoUrl';
+
+function GitHubSection() {
+  const [credential, setCredential] = useState<{
+    hasToken: boolean;
+    login: string | null;
+  } | null>(null);
+  const [token, setToken] = useState('');
+  const [showToken, setShowToken] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [statusMsg, setStatusMsg] = useState<{
+    level: 'success' | 'error';
+    text: string;
+  } | null>(null);
+  const [defaultOwner, setDefaultOwner] = useState<string>(() => {
+    try {
+      return localStorage.getItem(GH_DEFAULT_OWNER_KEY) ?? '';
+    } catch {
+      return '';
+    }
+  });
+  const [defaultRepoUrl, setDefaultRepoUrl] = useState<string>(() => {
+    try {
+      return localStorage.getItem(GH_DEFAULT_REPO_URL_KEY) ?? '';
+    } catch {
+      return '';
+    }
+  });
+
+  const refresh = async () => {
+    try {
+      const cred = await fetchGitHubCredential();
+      setCredential({ hasToken: cred.hasToken, login: cred.login });
+    } catch {
+      setCredential({ hasToken: false, login: null });
+    }
+  };
+
+  useEffect(() => {
+    void refresh();
+  }, []);
+
+  const handleSave = async () => {
+    setStatusMsg(null);
+    setSaving(true);
+    try {
+      const result = await saveGitHubCredential(token);
+      setCredential({ hasToken: result.hasToken, login: result.login });
+      setStatusMsg({ level: 'success', text: result.message ?? 'Saved' });
+      setToken('');
+    } catch (err) {
+      setStatusMsg({
+        level: 'error',
+        text: (err as Error).message ?? 'save failed',
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleClear = async () => {
+    setStatusMsg(null);
+    try {
+      await clearGitHubCredential();
+      setCredential({ hasToken: false, login: null });
+      setToken('');
+    } catch (err) {
+      setStatusMsg({ level: 'error', text: (err as Error).message ?? 'clear failed' });
+    }
+  };
+
+  const handleTest = async () => {
+    setStatusMsg(null);
+    setTesting(true);
+    try {
+      const result = await testGitHubCredential();
+      setStatusMsg({
+        level: result.ok ? 'success' : 'error',
+        text: result.message,
+      });
+      // If the probe came back with a fresh login (e.g. user rotated the
+      // PAT to a different account), update the on-screen credential so
+      // "Connected as <login>" stays accurate without a full reload.
+      if (result.ok && result.login && credential) {
+        setCredential({ ...credential, login: result.login });
+      }
+    } catch (err) {
+      setStatusMsg({
+        level: 'error',
+        text: (err as Error).message ?? 'test request failed',
+      });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  // Tolerate full URLs / `<owner>/<repo>` pastes by reducing the input
+  // to just the bare owner segment. Without this the push modal could
+  // emit `https://github.com/https://github.com/...` (reported on
+  // 2026-04-30) when a user pasted a github URL into this field.
+  const normalizeOwner = (raw: string): string => {
+    const trimmed = raw.trim();
+    if (!trimmed) return '';
+    const stripped = trimmed
+      .replace(/^https?:\/\//i, '')
+      .replace(/^github\.com\//i, '')
+      .replace(/^git@github\.com:/i, '');
+    const firstSegment = stripped.split(/[/?#]/)[0] ?? '';
+    return firstSegment.replace(/\.git$/, '');
+  };
+
+  const handleSaveDefaultOwner = (next: string) => {
+    // Keep the raw input on screen as the user types so they see what
+    // they're typing; persist the cleaned form so downstream consumers
+    // can rely on a bare owner. Sanitize-on-save is the safer half of
+    // the deal — push modal also normalizes when reading.
+    setDefaultOwner(next);
+    try {
+      const clean = normalizeOwner(next);
+      if (clean) {
+        localStorage.setItem(GH_DEFAULT_OWNER_KEY, clean);
+      } else {
+        localStorage.removeItem(GH_DEFAULT_OWNER_KEY);
+      }
+    } catch {
+      /* localStorage unavailable — non-fatal */
+    }
+  };
+
+  // The owner the push modal will pre-fill with: explicit override > PAT
+  // login > nothing (user has to type the full URL each time). The
+  // normalized form is what's persisted; the on-screen `defaultOwner`
+  // state can hold a half-typed value the user is still editing.
+  const effectiveOwner = normalizeOwner(defaultOwner) || credential?.login || '';
+
+  const handleSaveDefaultRepoUrl = (next: string) => {
+    setDefaultRepoUrl(next);
+    try {
+      const trimmed = next.trim();
+      if (trimmed) {
+        localStorage.setItem(GH_DEFAULT_REPO_URL_KEY, trimmed);
+      } else {
+        localStorage.removeItem(GH_DEFAULT_REPO_URL_KEY);
+      }
+    } catch {
+      /* localStorage unavailable — non-fatal */
+    }
+  };
+
+  return (
+    <section>
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="flex items-center gap-1.5 text-[var(--text-xs)] font-semibold text-[var(--text-tertiary)] uppercase tracking-wider">
+          <Github className="w-3.5 h-3.5" />
+          GitHub
+        </h3>
+        {credential?.hasToken && credential.login && (
+          <span className="text-[var(--text-xs)] text-[var(--success-text)]">
+            Connected as {credential.login}
+          </span>
+        )}
+      </div>
+
+      <div className="rounded-[var(--radius-md)] border border-[var(--border-subtle)] bg-[var(--bg-card)] px-3 py-3">
+        <p className="text-[var(--text-xs)] text-[var(--text-secondary)] leading-relaxed mb-3">
+          Add a Personal Access Token with <code className="font-mono">repo</code> scope to push
+          projects to GitHub. The token is AES-256-GCM encrypted server-side; plaintext never
+          leaves the server.{' '}
+          <a
+            href="https://github.com/settings/tokens?type=beta"
+            target="_blank"
+            rel="noreferrer"
+            className="text-[var(--primary)] hover:underline"
+          >
+            Create one ↗
+          </a>
+        </p>
+
+        {credential?.hasToken ? (
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <span className="text-[var(--text-sm)] text-[var(--text-primary)]">
+              Token on file{credential.login ? ` for ${credential.login}` : ''}.
+            </span>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="ghost"
+                onClick={() => setCredential({ hasToken: false, login: credential.login })}
+              >
+                Replace
+              </Button>
+              <Button variant="ghost" onClick={handleClear}>
+                Sign out
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div>
+            <div className="relative">
+              <input
+                type={showToken ? 'text' : 'password'}
+                autoComplete="off"
+                value={token}
+                onChange={(e) => setToken(e.target.value)}
+                placeholder="ghp_…"
+                className="w-full px-3 py-2 pr-10 bg-[var(--bg-card)] border border-[var(--border-subtle)] rounded-[var(--radius-md)] text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/20 font-mono text-[var(--text-sm)]"
+              />
+              <button
+                type="button"
+                onClick={() => setShowToken((v) => !v)}
+                aria-label={showToken ? 'Hide token' : 'Show token'}
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-[var(--radius-sm)] text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+              >
+                {showToken ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+              </button>
+            </div>
+            <div className="flex justify-end mt-2">
+              <Button
+                variant="primary"
+                size="sm"
+                icon={
+                  saving ? (
+                    <Loader2 className="w-4 h-4 animate-[spin_1s_linear_infinite]" />
+                  ) : (
+                    <Check className="w-4 h-4" />
+                  )
+                }
+                onClick={handleSave}
+                disabled={!token.trim() || saving}
+              >
+                {saving ? 'Probing…' : 'Save token'}
+              </Button>
+            </div>
+          </div>
+        )}
+
+        <div className="mt-4 pt-4 border-t border-[var(--border-subtle)]">
+          <label className="block text-[var(--text-sm)] text-[var(--text-primary)] font-medium mb-1.5">
+            Default repo URL{' '}
+            <span className="text-[var(--text-tertiary)] font-normal">(recommended)</span>
+          </label>
+          <input
+            type="text"
+            value={defaultRepoUrl}
+            onChange={(e) => handleSaveDefaultRepoUrl(e.target.value)}
+            placeholder="https://github.com/<owner>/<repo>"
+            className="w-full px-3 py-2 bg-[var(--bg-card)] border border-[var(--border-subtle)] rounded-[var(--radius-md)] text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/20 font-mono text-[var(--text-sm)]"
+          />
+          <p className="text-[var(--text-xs)] text-[var(--text-tertiary)] mt-1.5 leading-relaxed">
+            Set this to the exact repo every push should target. Create the
+            repo on github.com first — the push then only needs <code className="font-mono">push</code>{' '}
+            permission on your PAT (no <code className="font-mono">repo</code>-create scope).
+            When this is set, the owner field below is ignored.
+          </p>
+        </div>
+
+        <div className="mt-4 pt-4 border-t border-[var(--border-subtle)]">
+          <label className="block text-[var(--text-sm)] text-[var(--text-primary)] font-medium mb-1.5">
+            Default repo owner / org{' '}
+            <span className="text-[var(--text-tertiary)] font-normal">(fallback)</span>
+          </label>
+          <input
+            type="text"
+            value={defaultOwner}
+            onChange={(e) => handleSaveDefaultOwner(e.target.value)}
+            placeholder={credential?.login ?? 'your-username-or-org'}
+            disabled={defaultRepoUrl.trim().length > 0}
+            className="w-full px-3 py-2 bg-[var(--bg-card)] border border-[var(--border-subtle)] rounded-[var(--radius-md)] text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/20 font-mono text-[var(--text-sm)] disabled:opacity-50"
+          />
+          <p className="text-[var(--text-xs)] text-[var(--text-tertiary)] mt-1.5 leading-relaxed">
+            Used only when no Default repo URL is set. Pushes pre-fill as{' '}
+            <span className="font-mono text-[var(--text-secondary)]">
+              {effectiveOwner || '<owner>'}/&lt;project-slug&gt;
+            </span>{' '}
+            (a different repo per project). The repo is auto-created private if
+            it doesn&apos;t exist — your PAT must allow repo creation.
+          </p>
+        </div>
+
+        {/*
+          Test + status banner sit at the bottom of the section so the user
+          can validate the full setup (token + default owner) in one click
+          after configuring everything above. The Test button is only
+          visible when a token's on file — without one there's nothing
+          meaningful to probe.
+        */}
+        {credential?.hasToken && (
+          <div className="mt-4 pt-4 border-t border-[var(--border-subtle)] flex items-center justify-between gap-3 flex-wrap">
+            <span className="text-[var(--text-xs)] text-[var(--text-tertiary)]">
+              Verify the on-file token is still active.
+            </span>
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={
+                testing ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-[spin_1s_linear_infinite]" />
+                ) : (
+                  <Plug className="w-3.5 h-3.5" />
+                )
+              }
+              onClick={handleTest}
+              disabled={testing}
+            >
+              {testing ? 'Testing…' : 'Test connection'}
+            </Button>
+          </div>
+        )}
+
+        {statusMsg && (
+          <div
+            className={`mt-3 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-[var(--text-xs)] ${
+              statusMsg.level === 'success'
+                ? 'bg-[var(--success-bg)] text-[var(--success-text)]'
+                : 'bg-[var(--danger-bg)] text-[var(--danger-text)]'
+            }`}
+          >
+            {statusMsg.text}
+          </div>
+        )}
+      </div>
+    </section>
   );
 }

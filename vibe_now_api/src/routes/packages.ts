@@ -10,6 +10,7 @@ import { importPackage, type ImportInput } from '../lib/packageImport.js';
 import { ingestPackage } from '../lib/packageIngest.js';
 import { getProject } from '../lib/projects.js';
 import { snapshotVersion } from '../lib/versions.js';
+import { importFromGitHub, type GitHubImportInput } from '../lib/githubImport.js';
 
 interface ErrorReply {
   error: string;
@@ -43,6 +44,31 @@ export async function registerPackageRoutes(app: FastifyInstance): Promise<void>
           });
       }
       return reply.send(pkg);
+    },
+  );
+
+  // Clone any public Now SDK repo (or private when PAT support lands) and
+  // hand it to the regular import pipeline. Same response shape as
+  // /api/packages/import — frontend's `handlePackageImported` consumes
+  // both interchangeably.
+  app.post<{ Body: GitHubImportInput; Reply: unknown | ErrorReply }>(
+    '/api/packages/import-from-github',
+    async (req, reply) => {
+      const body = req.body;
+      if (!body?.repoUrl) {
+        return reply.code(400).send({ error: 'repoUrl is required' });
+      }
+      try {
+        const result = await importFromGitHub(body);
+        return reply.send(result);
+      } catch (err) {
+        const e = err as Error;
+        req.log.error(
+          { err: e, repoUrl: body.repoUrl },
+          'github import failed',
+        );
+        return reply.code(400).send({ error: e.message });
+      }
     },
   );
 

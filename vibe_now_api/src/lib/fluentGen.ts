@@ -106,6 +106,34 @@ export function generateFluentProject({
 
   writeFile(`${workspaceDir}/src/fluent/roles/${roleName}.now.ts`, roleRecord(roleName));
 
+  // Application Menu + per-table Modules so the deployed scoped app shows
+  // up in the platform's All / left navigator. Without these records, the
+  // app deploys but lives only as a scope — there's no "Open" entry in the
+  // nav and the user has to find tables by typing the table name. We emit:
+  //   - sys_app_category  (visual grouping under "All")
+  //   - sys_app_application (the menu itself; what shows in nav)
+  //   - sys_app_module rows per spec table: "All <Label>" (LIST) +
+  //     "Add <Label>" (NEW)
+  // Wipe stale menu files first so renamed/removed tables don't leave
+  // orphan modules pointing at deleted tables.
+  const menusDir = `${workspaceDir}/src/fluent/menus`;
+  if (existsSync(menusDir)) {
+    rmSync(menusDir, { recursive: true, force: true });
+  }
+  writeFile(
+    `${workspaceDir}/src/fluent/menus/application-menu.now.ts`,
+    applicationMenu({
+      scope,
+      slug,
+      title,
+      description: spec.description,
+      tables:
+        spec.tables && spec.tables.length > 0
+          ? spec.tables.map((t) => ({ name: t.name, label: t.label }))
+          : [{ name: 'record', label: title }],
+    }),
+  );
+
   if (spec.portal?.enabled) {
     const ids = derivePortalSysIds(slug, scopeId);
     const useFigmaWidget = !!figmaWidget;
@@ -371,6 +399,23 @@ const KNOWN_OOB_TABLES = new Set([
   'kb_knowledge',
 ]);
 
+// ServiceNow column names must be `[a-z0-9_]` only — no camelCase, no
+// spaces, no dashes. The LLM frequently emits camelCase ("sourceSighting",
+// "duckCount"); normalize to snake_case here so the build can't fail on
+// the TS303 diagnostic. Also strip a leading digit since column names
+// can't start with one.
+function toSnakeColumn(name: string): string {
+  const snake = name
+    // camelCase + PascalCase → snake_case (insert _ before each capital)
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .replace(/([A-Z])([A-Z][a-z])/g, '$1_$2')
+    .toLowerCase()
+    // anything that isn't [a-z0-9] becomes _
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  return /^\d/.test(snake) ? `_${snake}` : snake || 'column';
+}
+
 function domainTable(opts: { scope: string; table: TableInput }): string {
   const { scope, table } = opts;
   const fullName = `${scope}_${table.name}`;
@@ -379,7 +424,7 @@ function domainTable(opts: { scope: string; table: TableInput }): string {
 
   for (const col of table.columns) {
     const line = renderColumn(scope, col, importedColumns);
-    if (line) schemaLines.push(`        ${col.name}: ${line},`);
+    if (line) schemaLines.push(`        ${toSnakeColumn(col.name)}: ${line},`);
   }
 
   // Sort imports for deterministic output across rebuilds (helps SDK caching
@@ -452,6 +497,82 @@ function renderColumn(
       imports.add('StringColumn');
       return `StringColumn({ ${labelArg}${mandArg} })`;
   }
+}
+
+// Build an Application Menu + per-table Modules so the scoped app shows
+// up in the platform navigator. Each table gets two modules — a LIST
+// view ("All <Label>") and a NEW form ("Add <Label>") — keyed off the
+// fully scoped table name so new records carry the correct application.
+// $id aliases (`Now.ID[...]`) are deterministic per slug+table so
+// rebuilds don't churn sys_ids.
+function applicationMenu(opts: {
+  scope: string;
+  slug: string;
+  title: string;
+  description: string;
+  tables: Array<{ name: string; label: string }>;
+}): string {
+  const { scope, slug, title, description, tables } = opts;
+  const safeTitle = title.replace(/'/g, "\\'");
+  const safeDescription = description.replace(/'/g, "\\'").replace(/\n+/g, ' ');
+  const moduleBlocks: string[] = [];
+
+  tables.forEach((t, i) => {
+    const fullName = `${scope}_${t.name}`;
+    const baseOrder = 100 + i * 20;
+    const safeLabel = t.label.replace(/'/g, "\\'");
+    moduleBlocks.push(`Record({
+    $id: Now.ID['mod_${slug}_${t.name}_list'],
+    table: 'sys_app_module',
+    data: {
+        title: 'All ${safeLabel}',
+        application: ${slug}AppMenu,
+        order: ${baseOrder},
+        link_type: 'LIST',
+        name: '${fullName}',
+        active: true,
+    },
+})`);
+    moduleBlocks.push(`Record({
+    $id: Now.ID['mod_${slug}_${t.name}_new'],
+    table: 'sys_app_module',
+    data: {
+        title: 'Add ${safeLabel}',
+        application: ${slug}AppMenu,
+        order: ${baseOrder + 10},
+        link_type: 'NEW',
+        name: '${fullName}',
+        active: true,
+    },
+})`);
+  });
+
+  return `import { ApplicationMenu, Record } from '@servicenow/sdk/core'
+
+// Application category + menu — surfaces the scoped app in the platform's
+// All / left navigator under a "${safeTitle}" section.
+
+export const ${slug}Category = Record({
+    $id: Now.ID['app_cat_${slug}'],
+    table: 'sys_app_category',
+    data: {
+        name: '${safeTitle}',
+        style: 'border: 1px solid #4F46E5; background-color: #EEF2FF;',
+        default_order: 100,
+    },
+})
+
+export const ${slug}AppMenu = ApplicationMenu({
+    $id: Now.ID['app_menu_${slug}'],
+    title: '${safeTitle}',
+    hint: '${safeDescription || safeTitle}',
+    description: '${safeDescription || safeTitle}',
+    category: ${slug}Category,
+    active: true,
+})
+
+${moduleBlocks.join('\n\n')}
+`;
 }
 
 function roleRecord(roleName: string): string {

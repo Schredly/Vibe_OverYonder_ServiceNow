@@ -101,6 +101,8 @@ export const api = {
   get: <T>(path: string) => request<T>(path, { method: 'GET' }),
   post: <T>(path: string, body?: unknown) =>
     request<T>(path, { method: 'POST', body: body ? safeStringify(body) : undefined }),
+  put: <T>(path: string, body?: unknown) =>
+    request<T>(path, { method: 'PUT', body: body ? safeStringify(body) : undefined }),
   patch: <T>(path: string, body?: unknown) =>
     request<T>(path, { method: 'PATCH', body: body ? safeStringify(body) : undefined }),
   delete: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
@@ -365,6 +367,121 @@ export async function importPackage(input: {
   description?: string;
 }): Promise<ImportedPackage> {
   return api.post<ImportedPackage>('/api/packages/import', input);
+}
+
+export interface GitHubImportInput {
+  repoUrl: string;
+  name?: string;
+  description?: string;
+  ref?: string;
+}
+
+export interface GitHubImportedPackage extends ImportedPackage {
+  sourceRepoUrl: string;
+}
+
+export async function importPackageFromGitHub(
+  input: GitHubImportInput & { subPath?: string },
+): Promise<GitHubImportedPackage> {
+  return api.post<GitHubImportedPackage>(
+    '/api/packages/import-from-github',
+    input,
+  );
+}
+
+export interface GitHubBrowseEntry {
+  name: string;
+  type: 'dir' | 'file';
+  path: string;
+}
+
+export interface GitHubBrowseResult {
+  repoUrl: string;
+  ref: string;
+  path: string;
+  entries: GitHubBrowseEntry[];
+}
+
+/** List a directory inside a GitHub repo via the REST contents API.
+ *  No clone — used by the Open Existing Package picker to drill from
+ *  repo root → project folder → version. */
+export async function browseGitHubRepo(
+  repoUrl: string,
+  path?: string,
+  ref?: string,
+): Promise<GitHubBrowseResult> {
+  const qs = new URLSearchParams({ repoUrl });
+  if (path) qs.set('path', path);
+  if (ref) qs.set('ref', ref);
+  return api.get<GitHubBrowseResult>(`/api/github/browse?${qs.toString()}`);
+}
+
+// ---------------------------------------------------------------------------
+// GitHub credential + push (vibe_now_api/src/routes/github.ts).
+// ---------------------------------------------------------------------------
+
+export interface GitHubCredential {
+  hasToken: boolean;
+  login: string | null;
+  updatedAt: string | null;
+  message?: string;
+}
+
+export async function fetchGitHubCredential(): Promise<GitHubCredential> {
+  return api.get<GitHubCredential>('/api/github/credential');
+}
+
+export async function saveGitHubCredential(token: string): Promise<GitHubCredential> {
+  return api.put<GitHubCredential>('/api/github/credential', { token });
+}
+
+export async function clearGitHubCredential(): Promise<{ ok: boolean }> {
+  return api.delete<{ ok: boolean }>('/api/github/credential');
+}
+
+export interface GitHubTestResult {
+  ok: boolean;
+  login?: string;
+  message: string;
+}
+
+/** Probe the on-file PAT against GitHub /user without modifying it.
+ *  Used by Settings → GitHub's "Test connection" button. */
+export async function testGitHubCredential(): Promise<GitHubTestResult> {
+  return api.post<GitHubTestResult>('/api/github/test', {});
+}
+
+export type GitHubPushMode = 'update' | 'new-version';
+
+export interface GitHubPushResult {
+  repoUrl: string;
+  branch: string;
+  commitSha: string | null;
+  ownerRepo: string;
+  pushedPath: string;
+  projectFolder: string;
+  packageName: string;
+  versionTag: string;
+  repoCreated: boolean;
+  mode: GitHubPushMode;
+}
+
+export async function pushProjectToGitHub(
+  projectId: string,
+  input: {
+    repoUrl: string;
+    mode: GitHubPushMode;
+    projectFolder?: string;
+    packageName?: string;
+    versionTag?: string;
+    commitMessage?: string;
+    branch?: string;
+  },
+): Promise<GitHubPushResult> {
+  return api.post<GitHubPushResult>(
+    `/api/projects/${encodeURIComponent(projectId)}/github/push`,
+    input,
+  );
 }
 
 // Mirrors vibe_now_api/src/lib/packageIngest.ts#IngestResult.

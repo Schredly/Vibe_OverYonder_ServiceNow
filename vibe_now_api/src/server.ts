@@ -9,6 +9,7 @@ import { registerBuildRoutes } from './routes/build.js';
 import { registerChatRoutes } from './routes/chat.js';
 import { registerDeployRoutes } from './routes/deploy.js';
 import { registerFigmaRoutes } from './routes/figma.js';
+import { registerGitHubRoutes } from './routes/github.js';
 import { registerLlmCredentialRoutes } from './routes/llmCredentials.js';
 import { registerPackageRoutes } from './routes/packages.js';
 import { registerProjectRoutes } from './routes/projects.js';
@@ -62,6 +63,7 @@ async function main(): Promise<void> {
   await registerChatRoutes(app);
   await registerDeployRoutes(app);
   await registerFigmaRoutes(app);
+  await registerGitHubRoutes(app);
   await registerLlmCredentialRoutes(app);
   await registerPackageRoutes(app);
   await registerProjectRoutes(app);

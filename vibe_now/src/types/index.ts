@@ -85,6 +85,33 @@ export interface TableDef {
   columns: ColumnDef[];
 }
 
+/** Where this project's source files live. Per-project, configurable.
+ *
+ * `local`        — files stay under `vibe_now_api/workspaces/<projectId>/`
+ *                  (or a custom directory the user picked in Settings).
+ * `github`       — files mirror to a GitHub repo via PAT-authenticated push;
+ *                  Save & Build commits + tags the version + pushes.
+ * `push-failed`  — transient state: the project is GitHub-linked but the
+ *                  most recent push failed. Surfaces in the sidebar chip
+ *                  + kebab as a Retry affordance. Falls back to local-save
+ *                  per the 2026-04-29 design lock-in.
+ */
+export type ProjectStorageType = 'local' | 'github' | 'push-failed';
+
+export interface ProjectStorage {
+  type: ProjectStorageType;
+  /** `<owner>/<repo>` when type is github or push-failed. */
+  repoPath?: string;
+  /** Override the default `workspaces/<projectId>/` directory when local. */
+  localPath?: string;
+  /** When true, push and pull include `chat-history.json` so the next
+   *  clone can hydrate the consultant panel from the prior conversation. */
+  includeChatHistory?: boolean;
+  /** Last-error message when type is push-failed. Powers the tooltip on
+   *  the warning chip. */
+  lastError?: string;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -94,6 +121,8 @@ export interface Project {
   portal?: PortalConfig;
   assets?: ProjectAsset[];
   consultantMode?: ConsultantMode;
+  /** Per-project storage configuration. Undefined = default local. */
+  storage?: ProjectStorage;
   /** User-elicited data model. When set, replaces the placeholder
    *  technicalDetails.tables in the derived Spec. Persisted on the project so
    *  the user can iterate across turns without re-typing the schema. */
