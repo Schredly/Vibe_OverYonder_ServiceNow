@@ -1,0 +1,16 @@
+{
+    "name": "businessrule-sample",
+    "version": "1.0.0",
+    "description": "",
+    "keywords": [],
+    "author": "ServiceNow",
+    "license": "ISC",
+    "scripts": {
+        "build": "now-sdk build"
+    },
+    "devDependencies": {
+        "@servicenow/sdk": "catalog:",
+        "@servicenow/glide": "catalog:",
+        "typescript": "catalog:"
+    }
+}

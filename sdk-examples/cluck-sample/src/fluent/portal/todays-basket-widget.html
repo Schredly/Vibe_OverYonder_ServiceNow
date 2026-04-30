@@ -1,0 +1,124 @@
+<div class="cluck-tb">
+    <header class="cluck-tb-header">
+        <div class="cluck-tb-header-inner">
+            <div class="cluck-tb-wordmark">Cluckworks</div>
+            <nav class="cluck-tb-nav">
+                <a href="?id=cluck_basket" class="is-active">Today's Basket</a>
+                <a href="?id=cluck_flock">Meet the Flock</a>
+                <a href="javascript:void(0)">CSA</a>
+                <a href="javascript:void(0)">Visit</a>
+            </nav>
+        </div>
+    </header>
+
+    <section class="cluck-tb-hero">
+        <div class="cluck-tb-hero-inner">
+            <div class="cluck-tb-eyebrow">Collected this morning</div>
+            <h1 class="cluck-tb-display">{{data.dozens}} dozen</h1>
+            <p class="cluck-tb-hero-sub">Available right now from the coop. First come, first cracked.</p>
+            <div class="cluck-tb-as-of">
+                <span>As of {{data.as_of}}</span>
+                <span class="cluck-tb-pulse"></span>
+            </div>
+        </div>
+    </section>
+
+    <section class="cluck-tb-stats-section">
+        <div class="cluck-tb-stats-grid">
+            <div class="cluck-tb-tile">
+                <div class="cluck-tb-tile-value">{{data.total}}</div>
+                <div class="cluck-tb-tile-title">Total eggs today</div>
+                <div class="cluck-tb-tile-sub">across all grades</div>
+            </div>
+            <div class="cluck-tb-tile">
+                <div class="cluck-tb-tile-value">{{data.sellable}}</div>
+                <div class="cluck-tb-tile-title">Sellable</div>
+                <div class="cluck-tb-tile-sub">after culling {{data.cracked}} cracked</div>
+            </div>
+            <div class="cluck-tb-tile">
+                <div class="cluck-tb-tile-value">{{data.happy_hens}}</div>
+                <div class="cluck-tb-tile-title">Happy hens</div>
+                <div class="cluck-tb-tile-sub">currently in the flock</div>
+            </div>
+        </div>
+    </section>
+
+    <section class="cluck-tb-grades-section">
+        <div class="cluck-tb-grades-inner">
+            <h2 class="cluck-tb-section-title">By grade</h2>
+            <div class="cluck-tb-grades-grid">
+                <div ng-repeat="g in c.gradesList track by g.key" ng-class="{ 'cluck-tb-grade': true, 'is-novelty': g.novelty }">
+                    <span class="cluck-tb-grade-novelty-badge" ng-if="g.novelty">Rare find</span>
+                    <div class="cluck-tb-grade-head">
+                        <div class="cluck-tb-grade-icon" aria-hidden="true">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M12 22c-4.4 0-8-3.13-8-8 0-3.5 2.5-7.5 5-10.5C10.4 1.83 11.2 1 12 1s1.6.83 3 2.5c2.5 3 5 7 5 10.5 0 4.87-3.6 8-8 8z" />
+                            </svg>
+                        </div>
+                        <div class="cluck-tb-grade-name">{{g.label}}</div>
+                    </div>
+                    <div class="cluck-tb-grade-count">{{g.count}}</div>
+                    <div class="cluck-tb-grade-bar">
+                        <div class="cluck-tb-grade-bar-fill" ng-style="{ width: c.percent(g.count) + '%' }"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="cluck-tb-csa">
+        <div class="cluck-tb-csa-inner">
+            <div>
+                <h2 class="cluck-tb-csa-title">Want a dozen every week?</h2>
+                <p class="cluck-tb-csa-sub">Subscribe to our CSA and we'll set aside the freshest eggs from each morning's collection.</p>
+                <a href="?id=sc_cat_item&sys_id=cat_item_csa_sub" class="cluck-tb-csa-cta">
+                    <span>Start a Subscription</span>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M13 7l5 5m0 0l-5 5m5-5H6" />
+                    </svg>
+                </a>
+            </div>
+            <div class="cluck-tb-csa-illus">
+                <div class="cluck-tb-csa-illus-circle">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M3 6h18l-2 13H5L3 6z" />
+                        <path d="M3 6L5 3h14l2 3" />
+                        <path d="M9 10v4M15 10v4M12 10v4" />
+                    </svg>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <footer class="cluck-tb-footer">
+        <div class="cluck-tb-footer-inner">
+            <div class="cluck-tb-footer-cols">
+                <div class="cluck-tb-footer-col">
+                    <h4>About</h4>
+                    <ul>
+                        <li><a href="javascript:void(0)">Our Story</a></li>
+                        <li><a href="javascript:void(0)">The Farm</a></li>
+                        <li><a href="javascript:void(0)">Practices</a></li>
+                    </ul>
+                </div>
+                <div class="cluck-tb-footer-col">
+                    <h4>Contact</h4>
+                    <ul>
+                        <li>hello@cluckworks.farm</li>
+                        <li>(555) 123-4567</li>
+                        <li>123 Pasture Lane</li>
+                    </ul>
+                </div>
+                <div class="cluck-tb-footer-col">
+                    <h4>Newsletter</h4>
+                    <p style="font-size: 0.85rem; margin-bottom: var(--tb-space-12);">Get weekly updates from the coop</p>
+                    <div class="cluck-tb-newsletter-row">
+                        <input type="email" placeholder="Your email" ng-model="c.newsletterEmail" />
+                        <button class="cluck-tb-newsletter-btn">Join</button>
+                    </div>
+                </div>
+            </div>
+            <div class="cluck-tb-copyright">© 2026 Cluckworks. All rights reserved.</div>
+        </div>
+    </footer>
+</div>

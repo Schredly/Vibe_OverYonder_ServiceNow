@@ -1,0 +1,52 @@
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+*.swp
+
+# Claude Code session config
+.claude/
+
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+dist-ssr/
+build/
+target/
+.now/
+.vite/
+*.tsbuildinfo
+
+# Env / secrets — NEVER commit
+.env
+.env.local
+*.local
+.env.*.local
+
+# Local database (contains encrypted credentials)
+# `**/` prefix so the patterns match data/ subdirs at any depth
+# (vibe_now_api/data/, snow-converter/server/data/, etc.).
+**/data/*.db
+**/data/*.db-journal
+**/data/*.db-shm
+**/data/*.db-wal
+
+# Transient build workspaces (per-project SDK builds, multi-GB)
+vibe_now_api/workspaces/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Coverage / test
+coverage/
+.nyc_output/
+
+# Misc
+*.tgz
+.eslintcache

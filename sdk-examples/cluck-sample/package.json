@@ -1,0 +1,18 @@
+{
+    "name": "cluck-sample",
+    "version": "1.0.0",
+    "description": "Cluckworks - Farm-ops app for pastured-poultry operations: flock management, egg production, feed inventory, CSA subscriptions, adopt-a-hen program",
+    "keywords": ["chicken", "poultry", "farm", "eggs", "servicenow", "sdk"],
+    "author": "",
+    "license": "ISC",
+    "scripts": {
+        "build": "now-sdk build",
+        "deploy": "now-sdk install",
+        "types": "now-sdk dependencies"
+    },
+    "devDependencies": {
+        "@servicenow/glide": "^27.0.5",
+        "@servicenow/sdk": "^4.6.0",
+        "typescript": "^5.8.2"
+    }
+}

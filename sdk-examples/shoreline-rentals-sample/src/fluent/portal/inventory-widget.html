@@ -1,0 +1,27 @@
+<div class="shoreline-widget">
+    <div class="shoreline-header">
+        <h2>Shoreline Beach Rentals</h2>
+        <p class="tagline">
+            {{data.available_count}} items available across {{data.category_count}} categories.
+        </p>
+    </div>
+    <div class="shoreline-grid">
+        <div class="shoreline-card" ng-repeat="item in data.items track by item.sys_id">
+            <img ng-if="item.image_url" ng-src="{{item.image_url}}" alt="{{item.name}}" class="shoreline-card-img" />
+            <div class="shoreline-card-body">
+                <h3 class="shoreline-card-title">{{item.name}}</h3>
+                <div class="shoreline-meta">{{item.category}} · {{item.location}}</div>
+                <div class="shoreline-price">${{item.full_day_rate}}/day</div>
+                <div class="shoreline-stock" ng-class="{ 'low': item.available < 3 }">
+                    {{item.available}} available
+                </div>
+                <div class="shoreline-waiver" ng-if="item.requires_waiver">
+                    Waiver required
+                </div>
+                <button class="btn btn-primary" ng-click="c.reserve(item)">
+                    Reserve
+                </button>
+            </div>
+        </div>
+    </div>
+</div>

@@ -1,0 +1,23 @@
+{
+    "name": "vue-ui-page-ts-sample",
+    "version": "0.0.1",
+    "description": "",
+    "license": "UNLICENSED",
+    "scripts": {
+        "dev": "now-sdk run dev",
+        "build": "now-sdk build",
+        "deploy": "now-sdk install",
+        "transform": "now-sdk transform",
+        "types": "now-sdk dependencies"
+    },
+    "devDependencies": {
+        "@servicenow/glide": "catalog:",
+        "@servicenow/sdk": "catalog:",
+        "typescript": "catalog:",
+        "eslint": "8.50.0",
+        "@servicenow/eslint-plugin-sdk-app-plugin": "catalog:",
+        "@servicenow/isomorphic-rollup": "catalog:",
+        "rollup-plugin-vue": "6.0.0",
+        "vue": "3.5.21"
+    }
+}

@@ -1,0 +1,25 @@
+{
+    "name": "sdk-examples",
+    "version": "1.0.0",
+    "description": "",
+    "keywords": [],
+    "author": "ServiceNow",
+    "license": "ISC",
+    "scripts": {
+        "build": "pnpm -r run build",
+        "eslint": "eslint",
+        "prettier": "prettier --check",
+        "i": "pnpm install"
+    },
+    "engines": {
+        "node": ">=20",
+        "pnpm": ">=10"
+    },
+    "devDependencies": {
+        "eslint": "^8.57.0",
+        "prettier": "^3.8.1",
+        "eslint-config-prettier": "^9.1.0",
+        "typescript-eslint": "^7.4.0",
+        "@servicenow/eslint-plugin-sdk-app-plugin": "catalog:"
+    }
+}

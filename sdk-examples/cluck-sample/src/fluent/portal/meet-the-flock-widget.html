@@ -1,0 +1,151 @@
+<div class="cluck-mtf">
+    <header class="cluck-mtf-header">
+        <div class="cluck-mtf-header-inner">
+            <div class="cluck-mtf-wordmark">Cluckworks</div>
+            <nav class="cluck-mtf-nav">
+                <a href="?id=cluck_basket">Today's Basket</a>
+                <a href="?id=cluck_flock" class="is-active">Meet the Flock</a>
+                <a href="?id=cluck_csa">CSA</a>
+                <a href="?id=cluck_visit">Visit</a>
+            </nav>
+        </div>
+    </header>
+
+    <section class="cluck-mtf-hero">
+        <div class="cluck-mtf-hero-inner">
+            <h1>Meet the Flock</h1>
+            <p class="cluck-mtf-hero-sub">
+                Sponsor a hen, get monthly photo updates, and know exactly where your eggs come from.
+            </p>
+            <div class="cluck-mtf-stat-row">
+                <span>{{data.available}} hens currently adoptable</span>
+                <span class="dot">·</span>
+                <span>Updated daily</span>
+            </div>
+        </div>
+    </section>
+
+    <section class="cluck-mtf-filter-section">
+        <div class="cluck-mtf-filter-bar">
+            <div class="cluck-mtf-search">
+                <svg class="cluck-mtf-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="11" cy="11" r="8" />
+                    <path d="m21 21-4.3-4.3" />
+                </svg>
+                <input
+                    type="text"
+                    placeholder="Search by name…"
+                    ng-model="c.searchQuery"
+                />
+            </div>
+
+            <div class="cluck-mtf-filter-actions">
+                <button
+                    ng-repeat="filter in ['All Breeds', 'Heritage', 'Layers']"
+                    ng-click="c.selectedBreed = filter"
+                    ng-class="{ 'is-active': c.selectedBreed === filter }"
+                    class="cluck-mtf-pill"
+                >{{filter}}</button>
+
+                <button class="cluck-mtf-sort">
+                    <span>Newest first</span>
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="m6 9 6 6 6-6" />
+                    </svg>
+                </button>
+            </div>
+        </div>
+    </section>
+
+    <section class="cluck-mtf-grid-section">
+        <div class="cluck-mtf-grid">
+            <article
+                class="cluck-mtf-card"
+                ng-repeat="hen in data.hens | filter:{ name: c.searchQuery } track by hen.sys_id"
+            >
+                <button
+                    class="cluck-mtf-favorite"
+                    ng-class="{ 'is-saved': c.saved[hen.sys_id] }"
+                    ng-click="c.toggleSave(hen.sys_id)"
+                    aria-label="Save favorite"
+                >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ng-attr-fill="{{ c.saved[hen.sys_id] ? 'currentColor' : 'none' }}">
+                        <path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.29 1.51 4.04 3 5.5l7 7Z" />
+                    </svg>
+                </button>
+
+                <div class="cluck-mtf-photo">
+                    <img ng-if="hen.photo_url" ng-src="{{hen.photo_url}}" alt="{{hen.name}}" />
+                    <div class="cluck-mtf-placeholder" ng-if="!hen.photo_url">🐔</div>
+                    <div class="cluck-mtf-sponsored-overlay" ng-if="hen.sponsored && hen.sponsored_by">
+                        Sponsored by {{hen.sponsored_by}}
+                    </div>
+                </div>
+
+                <div class="cluck-mtf-card-body">
+                    <span class="cluck-mtf-breed-pill">{{hen.breed}}</span>
+                    <h3 class="cluck-mtf-card-name">{{hen.name}}</h3>
+                    <p class="cluck-mtf-card-bio" ng-if="hen.bio">{{hen.bio}}</p>
+
+                    <div class="cluck-mtf-card-meta">
+                        <span ng-if="hen.hatched">Hatched {{hen.hatched}}</span>
+                        <span class="dot" ng-if="hen.hatched && hen.coop_name">·</span>
+                        <span ng-if="hen.coop_name">{{hen.coop_name}}</span>
+                    </div>
+
+                    <a
+                        ng-if="!hen.sponsored"
+                        class="cluck-mtf-cta"
+                        ng-href="?id=sc_cat_item&sys_id=cat_item_adopt_hen&bird_sys_id={{hen.sys_id}}"
+                    >Adopt {{hen.name}}</a>
+                    <a
+                        ng-if="hen.sponsored"
+                        class="cluck-mtf-cta cluck-mtf-cta--secondary"
+                        href="javascript:void(0)"
+                    >Send a thank-you</a>
+                </div>
+            </article>
+
+            <div class="cluck-mtf-empty" ng-if="!data.hens.length">
+                All hens currently sponsored — check back soon.
+            </div>
+        </div>
+    </section>
+
+    <footer class="cluck-mtf-footer">
+        <div class="cluck-mtf-footer-inner">
+            <div class="cluck-mtf-footer-cols">
+                <div class="cluck-mtf-footer-col">
+                    <h4>About</h4>
+                    <ul>
+                        <li><a href="javascript:void(0)">Our Story</a></li>
+                        <li><a href="javascript:void(0)">Farming Practices</a></li>
+                        <li><a href="javascript:void(0)">Sustainability</a></li>
+                    </ul>
+                </div>
+
+                <div class="cluck-mtf-footer-col">
+                    <h4>Contact</h4>
+                    <ul>
+                        <li><a href="javascript:void(0)">Visit the Farm</a></li>
+                        <li><a href="mailto:hello@cluckworks.farm">hello@cluckworks.farm</a></li>
+                        <li><a href="tel:5551234567">(555) 123-4567</a></li>
+                    </ul>
+                </div>
+
+                <div class="cluck-mtf-footer-col">
+                    <h4>Newsletter</h4>
+                    <p style="color: var(--mtf-muted-fg); font-size: 0.9rem;">Weekly updates from the coop</p>
+                    <div class="cluck-mtf-newsletter-row">
+                        <input type="email" placeholder="Your email" ng-model="c.newsletterEmail" />
+                        <button class="cluck-mtf-newsletter-btn">Join</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="cluck-mtf-copyright">
+                © 2026 Cluckworks. All rights reserved.
+            </div>
+        </div>
+    </footer>
+</div>

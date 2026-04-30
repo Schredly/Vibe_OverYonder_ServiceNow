@@ -1,0 +1,17 @@
+{
+    "name": "beachbum-sample",
+    "version": "1.0.0",
+    "description": "Beach Bum - Beach Equipment Checkout App",
+    "keywords": [],
+    "author": "",
+    "license": "ISC",
+    "scripts": {
+        "build": "now-sdk build",
+        "deploy": "now-sdk install"
+    },
+    "devDependencies": {
+        "@servicenow/glide": "catalog:",
+        "@servicenow/sdk": "catalog:",
+        "typescript": "catalog:"
+    }
+}

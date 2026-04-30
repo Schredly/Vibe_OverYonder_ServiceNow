@@ -1,0 +1,462 @@
+/* ---------------------------------------------------------------------------
+ * Cluckworks "Meet the Flock" — ported from Figma Make output (attempt 1).
+ * Source: /tmp/figma-make-outputs/attempt1/styles/theme.css
+ * All Tailwind utilities translated to plain SCSS, namespaced with .cluck-mtf-
+ * to avoid Bootstrap 3 collisions inside Service Portal.
+ * ------------------------------------------------------------------------- */
+
+.cluck-mtf {
+    /* Token layer — extracted from Figma Make theme.css */
+    --mtf-bg: #FAF7F0;
+    --mtf-fg: #3D2817;
+    --mtf-card: #FFFCF5;
+    --mtf-card-fg: #3D2817;
+    --mtf-primary: #C76A47;
+    --mtf-primary-fg: #FFFCF5;
+    --mtf-secondary: #8FA987;
+    --mtf-muted: #E8DFD0;
+    --mtf-muted-fg: #6B5A47;
+    --mtf-border: rgba(61, 40, 23, 0.15);
+    --mtf-input-bg: #FFFCF5;
+
+    --mtf-space-4: 0.25rem;
+    --mtf-space-8: 0.5rem;
+    --mtf-space-12: 0.75rem;
+    --mtf-space-16: 1rem;
+    --mtf-space-24: 1.5rem;
+    --mtf-space-32: 2rem;
+    --mtf-space-48: 3rem;
+    --mtf-space-64: 4rem;
+
+    --mtf-radius-card: 1rem;
+    --mtf-radius-pill: 999px;
+    --mtf-radius-input: 0.5rem;
+    --mtf-radius-button: 0.75rem;
+
+    --mtf-shadow-sm: 0 1px 2px 0 rgba(61, 40, 23, 0.05);
+    --mtf-shadow-md: 0 4px 6px -1px rgba(61, 40, 23, 0.1), 0 2px 4px -2px rgba(61, 40, 23, 0.1);
+    --mtf-shadow-lg: 0 10px 15px -3px rgba(61, 40, 23, 0.1), 0 4px 6px -4px rgba(61, 40, 23, 0.1);
+
+    --mtf-font-heading: 'Fraunces', Georgia, serif;
+    --mtf-font-body: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+
+    /* Reset Bootstrap 3 leakage on container */
+    background: var(--mtf-bg);
+    color: var(--mtf-fg);
+    font-family: var(--mtf-font-body);
+    font-size: 16px;
+    line-height: 1.5;
+    min-height: 100vh;
+
+    h1, h2, h3, h4 {
+        font-family: var(--mtf-font-heading);
+        color: var(--mtf-fg);
+        margin: 0;
+        font-weight: 500;
+        letter-spacing: -0.01em;
+    }
+
+    p { margin: 0; }
+    a { color: inherit; text-decoration: none; }
+    button { font-family: inherit; cursor: pointer; }
+    img { display: block; max-width: 100%; }
+
+    /* ---------- Header ---------- */
+    .cluck-mtf-header {
+        position: sticky;
+        top: 0;
+        z-index: 50;
+        background: rgba(250, 247, 240, 0.95);
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+        border-bottom: 1px solid var(--mtf-border);
+    }
+    .cluck-mtf-header-inner {
+        max-width: 80rem;
+        margin: 0 auto;
+        padding: 0 var(--mtf-space-16);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        height: 4rem;
+    }
+    .cluck-mtf-wordmark {
+        font-family: var(--mtf-font-heading);
+        font-size: 1.25rem;
+        font-weight: 600;
+        color: var(--mtf-fg);
+    }
+    .cluck-mtf-nav {
+        display: none;
+        align-items: center;
+        gap: var(--mtf-space-32);
+    }
+    .cluck-mtf-nav a {
+        color: var(--mtf-muted-fg);
+        font-size: 0.95rem;
+        transition: color 180ms ease;
+    }
+    .cluck-mtf-nav a:hover { color: var(--mtf-fg); }
+    .cluck-mtf-nav a.is-active { color: var(--mtf-fg); font-weight: 500; }
+
+    /* ---------- Hero ---------- */
+    .cluck-mtf-hero {
+        padding: var(--mtf-space-64) var(--mtf-space-16);
+        text-align: center;
+    }
+    .cluck-mtf-hero-inner {
+        max-width: 56rem;
+        margin: 0 auto;
+        display: flex;
+        flex-direction: column;
+        gap: var(--mtf-space-24);
+    }
+    .cluck-mtf-hero h1 {
+        font-size: 3rem;
+        line-height: 1.1;
+    }
+    .cluck-mtf-hero-sub {
+        font-size: 1.125rem;
+        color: var(--mtf-muted-fg);
+        max-width: 42rem;
+        margin: 0 auto;
+    }
+    .cluck-mtf-stat-row {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: var(--mtf-space-8);
+        color: var(--mtf-muted-fg);
+        font-size: 0.95rem;
+    }
+    .cluck-mtf-stat-row .dot { opacity: 0.5; }
+
+    /* ---------- Filter bar ---------- */
+    .cluck-mtf-filter-section {
+        padding: 0 var(--mtf-space-16) var(--mtf-space-32);
+    }
+    .cluck-mtf-filter-bar {
+        max-width: 80rem;
+        margin: 0 auto;
+        background: var(--mtf-card);
+        padding: var(--mtf-space-16);
+        border-radius: var(--mtf-radius-card);
+        box-shadow: var(--mtf-shadow-sm);
+        display: flex;
+        flex-direction: column;
+        gap: var(--mtf-space-16);
+    }
+    .cluck-mtf-search {
+        position: relative;
+        flex: 1;
+        max-width: 28rem;
+        width: 100%;
+    }
+    .cluck-mtf-search input {
+        width: 100%;
+        padding: var(--mtf-space-8) var(--mtf-space-16) var(--mtf-space-8) 2.5rem;
+        background: var(--mtf-input-bg);
+        border: 1px solid var(--mtf-border);
+        border-radius: var(--mtf-radius-input);
+        color: var(--mtf-fg);
+        font-size: 0.95rem;
+        outline: none;
+        transition: box-shadow 180ms ease;
+    }
+    .cluck-mtf-search input:focus {
+        box-shadow: 0 0 0 2px var(--mtf-primary);
+    }
+    .cluck-mtf-search-icon {
+        position: absolute;
+        left: var(--mtf-space-12);
+        top: 50%;
+        transform: translateY(-50%);
+        width: 1.125rem;
+        height: 1.125rem;
+        color: var(--mtf-muted-fg);
+        pointer-events: none;
+    }
+    .cluck-mtf-filter-actions {
+        display: flex;
+        align-items: center;
+        gap: var(--mtf-space-12);
+        flex-wrap: wrap;
+    }
+    .cluck-mtf-pill {
+        padding: var(--mtf-space-8) var(--mtf-space-16);
+        border-radius: var(--mtf-radius-pill);
+        background: var(--mtf-muted);
+        color: var(--mtf-muted-fg);
+        border: 0;
+        font-size: 0.9rem;
+        transition: background 180ms ease, color 180ms ease;
+    }
+    .cluck-mtf-pill:hover { background: rgba(232, 223, 208, 0.7); }
+    .cluck-mtf-pill.is-active {
+        background: var(--mtf-primary);
+        color: var(--mtf-primary-fg);
+    }
+    .cluck-mtf-sort {
+        display: inline-flex;
+        align-items: center;
+        gap: var(--mtf-space-8);
+        padding: var(--mtf-space-8) var(--mtf-space-16);
+        background: var(--mtf-input-bg);
+        border: 1px solid var(--mtf-border);
+        border-radius: var(--mtf-radius-input);
+        color: var(--mtf-fg);
+        font-size: 0.9rem;
+    }
+    .cluck-mtf-sort:hover { background: rgba(232, 223, 208, 0.5); }
+
+    /* ---------- Hen grid ---------- */
+    .cluck-mtf-grid-section {
+        padding: 0 var(--mtf-space-16) var(--mtf-space-64);
+    }
+    .cluck-mtf-grid {
+        max-width: 80rem;
+        margin: 0 auto;
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: var(--mtf-space-24);
+    }
+
+    /* ---------- Hen card ---------- */
+    .cluck-mtf-card {
+        position: relative;
+        background: var(--mtf-card);
+        border-radius: var(--mtf-radius-card);
+        overflow: hidden;
+        box-shadow: var(--mtf-shadow-md);
+        transition: box-shadow 180ms ease, transform 180ms ease;
+        display: flex;
+        flex-direction: column;
+    }
+    .cluck-mtf-card:hover {
+        box-shadow: var(--mtf-shadow-lg);
+        transform: translateY(-2px);
+    }
+    .cluck-mtf-favorite {
+        position: absolute;
+        top: var(--mtf-space-12);
+        right: var(--mtf-space-12);
+        z-index: 10;
+        width: 2.25rem;
+        height: 2.25rem;
+        border-radius: var(--mtf-radius-pill);
+        background: rgba(255, 252, 245, 0.85);
+        backdrop-filter: blur(4px);
+        -webkit-backdrop-filter: blur(4px);
+        border: 0;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--mtf-muted-fg);
+        transition: color 180ms ease, background 180ms ease;
+    }
+    .cluck-mtf-favorite:hover { background: rgba(255, 252, 245, 1); }
+    .cluck-mtf-favorite.is-saved {
+        color: var(--mtf-primary);
+    }
+    .cluck-mtf-favorite svg { width: 1.125rem; height: 1.125rem; }
+
+    .cluck-mtf-photo {
+        position: relative;
+        aspect-ratio: 1 / 1;
+        overflow: hidden;
+        background: var(--mtf-muted);
+    }
+    .cluck-mtf-photo img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+    }
+    .cluck-mtf-placeholder {
+        width: 100%;
+        height: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 4rem;
+    }
+    .cluck-mtf-sponsored-overlay {
+        position: absolute;
+        bottom: var(--mtf-space-12);
+        left: var(--mtf-space-12);
+        background: rgba(61, 40, 23, 0.9);
+        color: var(--mtf-bg);
+        padding: var(--mtf-space-4) var(--mtf-space-12);
+        border-radius: 0.5rem;
+        backdrop-filter: blur(4px);
+        -webkit-backdrop-filter: blur(4px);
+        font-size: 0.8rem;
+    }
+
+    .cluck-mtf-card-body {
+        padding: var(--mtf-space-24);
+        display: flex;
+        flex-direction: column;
+        gap: var(--mtf-space-16);
+        flex: 1;
+    }
+    .cluck-mtf-breed-pill {
+        display: inline-flex;
+        align-self: flex-start;
+        padding: var(--mtf-space-4) var(--mtf-space-12);
+        background: var(--mtf-muted);
+        color: var(--mtf-muted-fg);
+        border-radius: var(--mtf-radius-pill);
+        font-size: 0.8rem;
+    }
+    .cluck-mtf-card-name {
+        font-size: 1.5rem;
+        margin-top: var(--mtf-space-8);
+    }
+    .cluck-mtf-card-bio {
+        color: var(--mtf-muted-fg);
+        font-size: 0.95rem;
+        line-height: 1.5;
+        display: -webkit-box;
+        -webkit-line-clamp: 3;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+    }
+    .cluck-mtf-card-meta {
+        display: flex;
+        align-items: center;
+        gap: var(--mtf-space-12);
+        color: var(--mtf-muted-fg);
+        font-size: 0.85rem;
+    }
+    .cluck-mtf-card-meta .dot { opacity: 0.5; }
+
+    .cluck-mtf-cta {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 100%;
+        padding: var(--mtf-space-12) var(--mtf-space-24);
+        border-radius: var(--mtf-radius-button);
+        background: var(--mtf-primary);
+        color: var(--mtf-primary-fg);
+        border: 0;
+        font-size: 0.95rem;
+        font-weight: 500;
+        text-align: center;
+        box-shadow: var(--mtf-shadow-sm);
+        transition: opacity 180ms ease, box-shadow 180ms ease;
+    }
+    .cluck-mtf-cta:hover {
+        opacity: 0.9;
+        box-shadow: var(--mtf-shadow-md);
+        color: var(--mtf-primary-fg);
+        text-decoration: none;
+    }
+    .cluck-mtf-cta--secondary {
+        background: var(--mtf-card);
+        color: var(--mtf-fg);
+        border: 1px solid var(--mtf-border);
+    }
+    .cluck-mtf-cta--secondary:hover {
+        background: var(--mtf-muted);
+        color: var(--mtf-fg);
+    }
+
+    .cluck-mtf-empty {
+        grid-column: 1 / -1;
+        text-align: center;
+        padding: var(--mtf-space-48);
+        color: var(--mtf-muted-fg);
+    }
+
+    /* ---------- Footer ---------- */
+    .cluck-mtf-footer {
+        background: var(--mtf-card);
+        border-top: 1px solid var(--mtf-border);
+    }
+    .cluck-mtf-footer-inner {
+        max-width: 80rem;
+        margin: 0 auto;
+        padding: var(--mtf-space-48) var(--mtf-space-16);
+    }
+    .cluck-mtf-footer-cols {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: var(--mtf-space-32);
+    }
+    .cluck-mtf-footer-col h4 {
+        font-size: 1rem;
+        margin-bottom: var(--mtf-space-16);
+    }
+    .cluck-mtf-footer-col ul {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+        display: flex;
+        flex-direction: column;
+        gap: var(--mtf-space-8);
+    }
+    .cluck-mtf-footer-col a {
+        color: var(--mtf-muted-fg);
+        font-size: 0.9rem;
+        transition: color 180ms ease;
+    }
+    .cluck-mtf-footer-col a:hover { color: var(--mtf-fg); text-decoration: none; }
+    .cluck-mtf-newsletter-row {
+        display: flex;
+        gap: var(--mtf-space-8);
+        margin-top: var(--mtf-space-12);
+    }
+    .cluck-mtf-newsletter-row input {
+        flex: 1;
+        padding: var(--mtf-space-8) var(--mtf-space-16);
+        background: var(--mtf-input-bg);
+        border: 1px solid var(--mtf-border);
+        border-radius: var(--mtf-radius-input);
+        color: var(--mtf-fg);
+        font-size: 0.9rem;
+        outline: none;
+    }
+    .cluck-mtf-newsletter-row input:focus {
+        box-shadow: 0 0 0 2px var(--mtf-primary);
+    }
+    .cluck-mtf-newsletter-btn {
+        padding: var(--mtf-space-8) var(--mtf-space-24);
+        background: var(--mtf-primary);
+        color: var(--mtf-primary-fg);
+        border: 0;
+        border-radius: var(--mtf-radius-button);
+        font-size: 0.9rem;
+        font-weight: 500;
+    }
+    .cluck-mtf-copyright {
+        margin-top: var(--mtf-space-48);
+        padding-top: var(--mtf-space-32);
+        border-top: 1px solid var(--mtf-border);
+        text-align: center;
+        color: var(--mtf-muted-fg);
+        font-size: 0.85rem;
+    }
+
+    /* ---------- Responsive (tablet) ---------- */
+    @media (min-width: 640px) {
+        .cluck-mtf-filter-bar {
+            flex-direction: row;
+            align-items: center;
+            justify-content: space-between;
+        }
+    }
+    @media (min-width: 768px) {
+        .cluck-mtf-nav { display: flex; }
+        .cluck-mtf-grid { grid-template-columns: repeat(2, 1fr); }
+        .cluck-mtf-footer-cols { grid-template-columns: repeat(3, 1fr); }
+    }
+    @media (min-width: 1024px) {
+        .cluck-mtf-hero { padding: 6rem var(--mtf-space-32); }
+        .cluck-mtf-hero h1 { font-size: 3.75rem; }
+        .cluck-mtf-grid {
+            grid-template-columns: repeat(3, 1fr);
+            gap: var(--mtf-space-32);
+        }
+    }
+}
