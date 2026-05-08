@@ -1,5 +1,5 @@
-import { useRef, useEffect, useState, FormEvent } from 'react';
-import { Send, Sparkles, Maximize2, Minimize2, Paperclip } from 'lucide-react';
+import { useRef, useEffect, useState, FormEvent, KeyboardEvent } from 'react';
+import { Send, Sparkles, Maximize2, Minimize2, Paperclip, X } from 'lucide-react';
 import { ChatBubble } from './ChatBubble';
 import { Button } from './Button';
 import { TypingIndicator } from './TypingIndicator';
@@ -50,26 +50,59 @@ export function Workspace({
 }: WorkspaceProps) {
   const isConsultant = consultantMode === 'on';
   const [input, setInput] = useState('');
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isThinking]);
 
+  // Auto-grow the textarea up to ~6 lines, then scroll inside.
+  useEffect(() => {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    ta.style.height = 'auto';
+    ta.style.height = `${Math.min(ta.scrollHeight, 160)}px`;
+  }, [input]);
+
+  const submit = () => {
+    if (isThinking) return;
+    const text = input.trim();
+    if (!text && pendingFiles.length === 0) return;
+    if (text) onSendMessage(text);
+    if (pendingFiles.length > 0 && onAttachAssets) onAttachAssets(pendingFiles);
+    setInput('');
+    setPendingFiles([]);
+  };
+
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
-    if (input.trim() && !isThinking) {
-      onSendMessage(input.trim());
-      setInput('');
-    }
+    submit();
+  };
+
+  // Plain Enter sends. Cmd/Ctrl+Enter (or Shift+Enter, conventionally)
+  // inserts a newline. We only intercept Enter — every other key goes
+  // through to the textarea's default behaviour, so wrapping works.
+  const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key !== 'Enter') return;
+    if (e.metaKey || e.ctrlKey || e.shiftKey) return; // newline
+    e.preventDefault();
+    submit();
   };
 
   const handleFilesPicked = (fileList: FileList | null) => {
-    if (!fileList || fileList.length === 0 || !onAttachAssets) return;
-    onAttachAssets(Array.from(fileList));
+    if (!fileList || fileList.length === 0) return;
+    setPendingFiles((prev) => [...prev, ...Array.from(fileList)]);
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
+
+  const removePendingFile = (idx: number) => {
+    setPendingFiles((prev) => prev.filter((_, i) => i !== idx));
+  };
+
+  const canSend = (input.trim().length > 0 || pendingFiles.length > 0) && !isThinking;
 
   return (
     <main className="flex-1 flex flex-col h-screen bg-[var(--bg-primary)] min-w-0">
@@ -181,7 +214,28 @@ export function Workspace({
 
       <div className="border-t border-[var(--border-subtle)] bg-[var(--bg-card)] px-8 py-4">
         <div className="max-w-[820px] mx-auto">
-          <form onSubmit={handleSubmit} className="flex gap-2">
+          {pendingFiles.length > 0 && (
+            <div className="flex flex-wrap gap-2 mb-2">
+              {pendingFiles.map((f, i) => (
+                <span
+                  key={`${f.name}-${i}`}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-[var(--radius-sm)] bg-[var(--bg-primary)] border border-[var(--border-subtle)] text-[var(--text-xs)] text-[var(--text-secondary)] max-w-[260px]"
+                >
+                  <Paperclip className="w-3 h-3 shrink-0" />
+                  <span className="truncate" title={f.name}>{f.name}</span>
+                  <button
+                    type="button"
+                    onClick={() => removePendingFile(i)}
+                    aria-label={`Remove ${f.name}`}
+                    className="shrink-0 p-0.5 rounded hover:bg-[var(--bg-hover)] text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+          <form onSubmit={handleSubmit} className="flex gap-2 items-end">
             <input
               ref={fileInputRef}
               type="file"
@@ -204,24 +258,26 @@ export function Workspace({
             >
               <Paperclip className="w-4 h-4" />
             </button>
-            <input
-              type="text"
+            <textarea
+              ref={textareaRef}
               value={input}
               onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              rows={1}
               placeholder={
                 isThinking
                   ? 'Working…'
-                  : 'Describe the app, or attach a logo, icon, or Figma .zip…'
+                  : 'Describe the app, or attach a logo, icon, or Figma .zip…  (⌘↵ for newline)'
               }
               disabled={isThinking}
-              className="flex-1 px-4 py-3 bg-[var(--bg-primary)] border border-[var(--border-subtle)] rounded-[var(--radius-md)] text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/20 transition-all disabled:opacity-60"
+              className="flex-1 px-4 py-3 bg-[var(--bg-primary)] border border-[var(--border-subtle)] rounded-[var(--radius-md)] text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/20 transition-all disabled:opacity-60 resize-none leading-6 max-h-[160px] overflow-y-auto"
             />
             <Button
               type="submit"
               variant="primary"
               size="md"
               icon={<Send className="w-4 h-4" />}
-              disabled={!input.trim() || isThinking}
+              disabled={!canSend}
             >
               Send
             </Button>
