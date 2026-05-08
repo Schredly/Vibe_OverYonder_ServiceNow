@@ -333,6 +333,37 @@ function buildExpressionAsNode(expr: t.Node, imports: ImportRecord[]): IrNode {
     return { kind: 'fragment', children: buildChildren(expr.children, imports) };
   if (t.isJSXText(expr)) return { kind: 'text', value: expr.value };
   if (t.isStringLiteral(expr)) return { kind: 'text', value: expr.value };
+
+  // Recurse into nested control-flow expressions so multi-level patterns
+  // like `a ? <X/> : b ? <Y/> : <Z/>` (Figma Make's typical multi-screen
+  // App.tsx) become a chain of IrIf instead of dumping the inner
+  // ternary's JSX into a raw `{{ }}` interpolation. Same for nested
+  // `cond && <X/>` and `arr.map(...)` calls inside a branch.
+  if (t.isConditionalExpression(expr) && t.isExpression(expr.test)) {
+    return {
+      kind: 'if',
+      condition: expressionSource(expr.test),
+      then: [buildExpressionAsNode(expr.consequent, imports)],
+      else: [buildExpressionAsNode(expr.alternate, imports)],
+    };
+  }
+  if (
+    t.isLogicalExpression(expr) &&
+    expr.operator === '&&' &&
+    t.isExpression(expr.left) &&
+    t.isExpression(expr.right)
+  ) {
+    return {
+      kind: 'if',
+      condition: expressionSource(expr.left),
+      then: [buildExpressionAsNode(expr.right, imports)],
+    };
+  }
+  // Parentheses around any of the above (`(cond ? <X/> : <Y/>)`).
+  if (t.isParenthesizedExpression?.(expr) && t.isExpression(expr.expression)) {
+    return buildExpressionAsNode(expr.expression, imports);
+  }
+
   if (t.isExpression(expr)) return { kind: 'expr', expression: expressionSource(expr) };
   return unsupported('unrecognized expression node', expr);
 }

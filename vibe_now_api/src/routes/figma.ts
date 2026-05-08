@@ -472,16 +472,24 @@ export async function registerFigmaRoutes(app: FastifyInstance): Promise<void> {
             for (const lit of c.literalBindings ?? []) push(lit);
           }
         }
+        // useState setters → scope functions. React's `setX(v)` updates
+        // the state and triggers a re-render; we model that as
+        // `$scope.setX = function(v) { $scope.x = v; }` so transpiled
+        // event handlers like `ng-click="setViewMode('case')"` actually
+        // mutate scope and AngularJS's digest re-renders the ng-if
+        // chain. Without these, sidebar / nav clicks do nothing because
+        // the setter ref is undefined on scope.
+        const setters: { name: string; stateName: string }[] = [];
+        const seenSetter = new Set<string>();
         for (const mod of ir.modules ?? []) {
           for (const c of mod.components ?? []) {
             for (const u of c.state ?? []) {
-              // useState(arg) — `arg` is the initial value. When arg is
-              // missing (`useState()`), default to undefined which becomes
-              // an empty value on the AngularJS scope — better than skipping
-              // the binding entirely (which would leave the raw {{ }} in
-              // the rendered output).
               const initial = u.initial?.trim() ? u.initial : 'undefined';
               replace({ name: u.name, sourceSnippet: initial });
+              if (u.setterName && !seenSetter.has(u.setterName)) {
+                seenSetter.add(u.setterName);
+                setters.push({ name: u.setterName, stateName: u.name });
+              }
             }
           }
         }
@@ -489,6 +497,9 @@ export async function registerFigmaRoutes(app: FastifyInstance): Promise<void> {
           seeds =
             '{ ' + merged.map((l) => `${l.name}: ${l.sourceSnippet}`).join(', ') + ' }';
         }
+        return reply
+          .header('content-type', 'text/html')
+          .send(buildPreviewBundle({ css, widgetHtml, seeds, extraStubNames, setters }));
       } catch {
         /* fall through with empty seeds */
       }
@@ -513,6 +524,12 @@ function buildPreviewBundle(opts: {
   /** Identifier names to declare as `null` so seed evaluation doesn't error.
    *  Populated from the IR's import map (Lucide + external React imports). */
   extraStubNames?: string[];
+  /** useState setter functions to install on the scope. Each entry maps a
+   *  setter name (e.g. `setViewMode`) to the state name it writes
+   *  (`viewMode`). The controller wires them so a transpiled
+   *  `ng-click="setViewMode('case')"` actually mutates scope and
+   *  AngularJS's digest re-renders the conditional branches. */
+  setters?: { name: string; stateName: string }[];
 }): string {
   // Strip the outer `<div class="vibe-figma-root">…</div>` wrapper from the
   // emitted HTML so we can put the controller directive on the same node.
@@ -577,10 +594,22 @@ function buildPreviewBundle(opts: {
     var SEEDS;
     try { SEEDS = ${opts.seeds}; } catch (e) { console.warn('preview seeds failed to evaluate:', e); SEEDS = {}; }
 
+    /* useState setters — generated from the IR's state list. Each one
+       writes the new value back to the corresponding scope key so that
+       click handlers transpiled from React (e.g. setViewMode('case'))
+       update scope and AngularJS's digest re-renders the conditional
+       branches that depend on it. */
+    var STATE_SETTERS = ${JSON.stringify(opts.setters ?? [])};
+
     angular.module('vibePreview', [])
       .controller('VibeCtrl', ['$scope', function($scope) {
         Object.assign($scope, SEEDS);
         $scope.data = SEEDS;
+        STATE_SETTERS.forEach(function(s) {
+          $scope[s.name] = function(value) {
+            $scope[s.stateName] = value;
+          };
+        });
       }]);
   </script>
 </body>

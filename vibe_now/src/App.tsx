@@ -22,7 +22,7 @@ import { extractZipAssets, isZipFile, type ExtractionSummary } from './lib/figma
 import {
   api,
   checkBackend,
-  chatTurn,
+  streamChatTurn,
   extractSpecFromDoc,
   streamRun,
   uploadFigmaZips,
@@ -525,43 +525,79 @@ export default function App() {
         content: m.message,
       }),
     );
-    const reply = await chatTurn({
-      messages: history,
-      consultantMode,
-      // Forward the project id so the backend can FK the usage row and the
-      // cost UIs roll up by project. Backend upserts the projects row on
-      // first call; idempotent on id.
-      projectId: project.id,
-      spec: {
-        title: activeSpec.title,
-        description: activeSpec.description,
-        tables: activeSpec.tables,
-        portal: activeSpec.portal
-          ? {
-              enabled: activeSpec.portal.enabled,
-              urlSuffix: activeSpec.portal.urlSuffix,
-            }
-          : undefined,
-        uiTrack: activeSpec.uiTrack
-          ? {
-              customUiNeeded: activeSpec.uiTrack.customUiNeeded,
-              audienceTier: activeSpec.uiTrack.audienceTier,
-              inputTier: activeSpec.uiTrack.inputTier,
-            }
-          : undefined,
-        architectureDecisions: project.architectureDecisions,
-        openQuestions: project.openQuestions,
+    // Streaming path — push a placeholder assistant message immediately
+    // so the UI shows the bubble + cursor as soon as the network call is
+    // in flight. Each `message-delta` from the backend appends to the
+    // placeholder's content; the final `done` event carries the full
+    // structured payload (specPatch, readyToBuild, usage).
+    const assistantId = (Date.now() + 1).toString();
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: assistantId,
+        role: 'assistant',
+        message: '',
+        timestamp: nowTime(),
       },
-    });
-    // Render the assistant reply.
-    const aiResponse: Message = {
-      id: (Date.now() + 1).toString(),
-      role: 'assistant',
-      message: reply.message,
-      timestamp: nowTime(),
-    };
-    setMessages((prev) => [...prev, aiResponse]);
-    return reply;
+    ]);
+
+    let accumulated = '';
+    try {
+      const reply = await streamChatTurn(
+        {
+          messages: history,
+          consultantMode,
+          // Forward the project id so the backend can FK the usage row and the
+          // cost UIs roll up by project. Backend upserts the projects row on
+          // first call; idempotent on id.
+          projectId: project.id,
+          spec: {
+            title: activeSpec.title,
+            description: activeSpec.description,
+            tables: activeSpec.tables,
+            portal: activeSpec.portal
+              ? {
+                  enabled: activeSpec.portal.enabled,
+                  urlSuffix: activeSpec.portal.urlSuffix,
+                }
+              : undefined,
+            uiTrack: activeSpec.uiTrack
+              ? {
+                  customUiNeeded: activeSpec.uiTrack.customUiNeeded,
+                  audienceTier: activeSpec.uiTrack.audienceTier,
+                  inputTier: activeSpec.uiTrack.inputTier,
+                }
+              : undefined,
+            architectureDecisions: project.architectureDecisions,
+            openQuestions: project.openQuestions,
+          },
+        },
+        {
+          onMessageDelta: (text) => {
+            accumulated += text;
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantId ? { ...m, message: accumulated } : m,
+              ),
+            );
+          },
+        },
+      );
+      // Reconcile the final message text against the streamed accumulator
+      // — escaping nuances in the partial-JSON decoder are unlikely to
+      // matter, but the parsed `reply.message` is authoritative.
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantId ? { ...m, message: reply.message } : m,
+        ),
+      );
+      return reply;
+    } catch (err) {
+      // Drop the placeholder so the caller's error path can fall back to
+      // the scripted reply without leaving an empty bubble behind.
+      setMessages((prev) => prev.filter((m) => m.id !== assistantId));
+      throw err;
+    }
   };
 
   const applyChatTurnReply = (reply: ChatTurnReply, projectId: string) => {

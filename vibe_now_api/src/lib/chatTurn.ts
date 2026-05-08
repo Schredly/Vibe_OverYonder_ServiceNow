@@ -13,6 +13,12 @@ import { SDK_BUNDLE } from './sdkBundle.js';
 import { recordUsage, type UsageRecord } from './usageTracker.js';
 import type { ColumnTypeDTO, TableDefDTO } from '../types.js';
 
+// reasoning_effort is only valid on the o-series + gpt-5 family. Sending
+// it to a non-reasoning model errors with HTTP 400, so gate by name.
+function isReasoningModel(model: string): boolean {
+  return /^(o\d|gpt-5)/i.test(model);
+}
+
 export type ChatRole = 'user' | 'assistant' | 'system';
 
 export interface ChatMessage {
@@ -253,7 +259,11 @@ export async function runChatTurn(
       'No OpenAI key configured. Open Settings → LLM Provider in the app to add one, or set OPENAI_API_KEY in vibe_now_api/.env.',
     );
   }
-  const model = opts.model ?? process.env.OPENAI_MODEL ?? 'gpt-5';
+  // Default to gpt-5-mini for chat: the four-beat consultant loop doesn't
+  // need flagship reasoning, and mini cuts perceived latency by ~3-5×.
+  // The OPENAI_MODEL env override + opts.model are both still honored so
+  // a user who explicitly wants gpt-5 can opt back in.
+  const model = opts.model ?? process.env.OPENAI_MODEL ?? 'gpt-5-mini';
   // Conversational turns are usually < 30s but can spike. Match the spec
   // extractor's resilience profile so a transient network blip doesn't
   // strand the user mid-conversation.
@@ -279,6 +289,11 @@ export async function runChatTurn(
 
   const completion = await client.chat.completions.create({
     model,
+    // GPT-5 family: skip the chain-of-thought for chat turns. The
+    // consultant loop is conversational, not analytical, so the
+    // reasoning tokens default ('medium') just adds latency without
+    // improving the structured output.
+    ...(isReasoningModel(model) ? { reasoning_effort: 'minimal' as const } : {}),
     messages: [
       { role: 'system', content: systemPrompt },
       ...recent.map((m) => ({ role: m.role, content: m.content })),
@@ -374,4 +389,287 @@ export async function runChatTurn(
     };
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Streaming variant — the route surface uses this so the user sees the
+// agent's `message` reply token-by-token rather than waiting on the full
+// structured payload. The `specPatch` and other state-changing fields
+// arrive in the final 'done' event because they aren't readable until
+// the JSON is complete.
+// ---------------------------------------------------------------------------
+
+export type ChatTurnStreamEvent =
+  | { type: 'message-delta'; text: string }
+  | { type: 'done'; response: ChatTurnResponse }
+  | { type: 'error'; message: string };
+
+// Walk a partial JSON buffer and return whatever we can decode of the
+// `message` string field. Returns null until the field opens. Handles
+// standard JSON escapes including `\uXXXX`.
+function extractPartialMessage(buf: string): string | null {
+  const marker = '"message":"';
+  const start = buf.indexOf(marker);
+  if (start === -1) return null;
+  let i = start + marker.length;
+  let out = '';
+  while (i < buf.length) {
+    const ch = buf[i];
+    if (ch === '\\') {
+      if (i + 1 >= buf.length) break; // need more bytes to decode escape
+      const next = buf[i + 1];
+      switch (next) {
+        case 'n':
+          out += '\n';
+          i += 2;
+          break;
+        case 't':
+          out += '\t';
+          i += 2;
+          break;
+        case 'r':
+          out += '\r';
+          i += 2;
+          break;
+        case '"':
+          out += '"';
+          i += 2;
+          break;
+        case '\\':
+          out += '\\';
+          i += 2;
+          break;
+        case '/':
+          out += '/';
+          i += 2;
+          break;
+        case 'b':
+          out += '\b';
+          i += 2;
+          break;
+        case 'f':
+          out += '\f';
+          i += 2;
+          break;
+        case 'u': {
+          if (i + 5 >= buf.length) return out; // wait for full \uXXXX
+          const hex = buf.slice(i + 2, i + 6);
+          const code = Number.parseInt(hex, 16);
+          if (Number.isNaN(code)) {
+            i += 2;
+            break;
+          }
+          out += String.fromCharCode(code);
+          i += 6;
+          break;
+        }
+        default:
+          out += next;
+          i += 2;
+          break;
+      }
+      continue;
+    }
+    if (ch === '"') return out; // string terminated
+    out += ch;
+    i++;
+  }
+  return out;
+}
+
+function buildResponse(raw: string, usageRecord: UsageRecord | null, usage: {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+} | null): ChatTurnResponse {
+  const parsed = JSON.parse(raw) as {
+    message: string;
+    readyToBuild: boolean;
+    specPatch: {
+      portal: { enabled: boolean; urlSuffix: string | null } | null;
+      tables: TableDefDTO[] | null;
+      answeredQuestions: string[] | null;
+      addedQuestions: string[] | null;
+      uiTrack: {
+        customUiNeeded: boolean | null;
+        audienceTier: 'audience-a' | 'audience-b' | null;
+        inputTier: 'sketch' | 'partial-figma' | 'full-figma' | null;
+      } | null;
+    } | null;
+  };
+  const out: ChatTurnResponse = {
+    message: parsed.message,
+    readyToBuild: parsed.readyToBuild || undefined,
+  };
+  if (parsed.specPatch) {
+    const p = parsed.specPatch;
+    const patch: ChatTurnSpecPatch = {};
+    if (p.portal) {
+      patch.portal = { enabled: p.portal.enabled, urlSuffix: p.portal.urlSuffix };
+    }
+    if (p.tables) patch.tables = p.tables;
+    if (p.answeredQuestions?.length) patch.answeredQuestions = p.answeredQuestions;
+    if (p.addedQuestions?.length) patch.addedQuestions = p.addedQuestions;
+    if (p.uiTrack) {
+      const u = p.uiTrack;
+      const ut: ChatTurnSpecPatch['uiTrack'] = {};
+      if (u.customUiNeeded !== null) ut.customUiNeeded = u.customUiNeeded;
+      if (u.audienceTier !== null) ut.audienceTier = u.audienceTier;
+      if (u.inputTier !== null) ut.inputTier = u.inputTier;
+      if (Object.keys(ut).length > 0) patch.uiTrack = ut;
+    }
+    if (Object.keys(patch).length > 0) out.specPatch = patch;
+  }
+  if (usageRecord && usage) {
+    out.usage = {
+      refinementRunId: usageRecord.refinementRunId,
+      inputTokens: usage.prompt_tokens ?? 0,
+      outputTokens: usage.completion_tokens ?? 0,
+      totalTokens: usage.total_tokens ?? 0,
+      rawCost: usageRecord.rawCost,
+      billableCost: usageRecord.billableCost,
+    };
+  }
+  return out;
+}
+
+export async function* streamChatTurn(
+  req: ChatTurnRequest,
+  opts: ChatTurnOptions = {},
+): AsyncGenerator<ChatTurnStreamEvent, void, void> {
+  const apiKey = opts.apiKey ?? resolveProviderKey('openai');
+  if (!apiKey) {
+    yield {
+      type: 'error',
+      message:
+        'No OpenAI key configured. Open Settings → LLM Provider in the app to add one, or set OPENAI_API_KEY in vibe_now_api/.env.',
+    };
+    return;
+  }
+  const model = opts.model ?? process.env.OPENAI_MODEL ?? 'gpt-5-mini';
+  const client = new OpenAI({ apiKey, maxRetries: 3, timeout: 120_000 });
+
+  const systemPrompt = [
+    SDK_BUNDLE,
+    '',
+    '---',
+    '',
+    '## Current spec snapshot',
+    '',
+    specSummary(req.spec),
+    '',
+    modeNote(req.consultantMode),
+    '',
+    'Respond with the structured object. Your `message` field is what the user sees in the chat. The `specPatch` is how state changes are committed — only emit it when the user has actually decided something this turn. **If `openQuestions` above contains items the user has not addressed, name them in your reply rather than moving on.**',
+  ].join('\n');
+
+  const recent = req.messages.slice(-30);
+
+  let stream;
+  try {
+    stream = await client.chat.completions.create({
+      model,
+      ...(isReasoningModel(model) ? { reasoning_effort: 'minimal' as const } : {}),
+      stream: true,
+      stream_options: { include_usage: true },
+      messages: [
+        { role: 'system', content: systemPrompt },
+        ...recent.map((m) => ({ role: m.role, content: m.content })),
+      ],
+      response_format: {
+        type: 'json_schema',
+        json_schema: {
+          name: 'vibe_overyonder_chat_turn',
+          strict: true,
+          schema: SCHEMA,
+        },
+      },
+    });
+  } catch (err) {
+    yield { type: 'error', message: (err as Error).message ?? 'OpenAI request failed' };
+    return;
+  }
+
+  let raw = '';
+  let emittedLen = 0;
+  let usage: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+  } | null = null;
+
+  // Manual drain of the OpenAI stream. `for await` doesn't iterate
+  // reliably when used INSIDE an async generator (same root cause as
+  // the route's manual drain — yielding back to the consumer between
+  // for-await iterations confuses the iterator protocol). Using
+  // `streamIter.next()` directly is functionally identical and works.
+  const streamIter = (stream as AsyncIterable<unknown>)[Symbol.asyncIterator]();
+  try {
+    while (true) {
+      const r = await streamIter.next();
+      if (r.done) break;
+      const chunk = r.value as {
+        choices?: Array<{ delta?: { content?: string } }>;
+        usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+      };
+      const delta = chunk.choices?.[0]?.delta?.content;
+      if (delta) {
+        raw += delta;
+        const decoded = extractPartialMessage(raw);
+        if (decoded !== null && decoded.length > emittedLen) {
+          yield { type: 'message-delta', text: decoded.slice(emittedLen) };
+          emittedLen = decoded.length;
+        }
+      }
+      // Final chunk carries usage when stream_options.include_usage is true.
+      if (chunk.usage) {
+        usage = {
+          prompt_tokens: chunk.usage.prompt_tokens,
+          completion_tokens: chunk.usage.completion_tokens,
+          total_tokens: chunk.usage.total_tokens,
+        };
+      }
+    }
+  } catch (err) {
+    yield { type: 'error', message: (err as Error).message ?? 'stream interrupted' };
+    return;
+  }
+
+  if (!raw) {
+    yield { type: 'error', message: 'OpenAI returned an empty response.' };
+    return;
+  }
+
+  // Record usage before parsing — capture spend even if structured output
+  // came back malformed.
+  let usageRecord: UsageRecord | null = null;
+  if (usage) {
+    const lastUserContent =
+      recent.findLast?.((m) => m.role === 'user')?.content ??
+      recent.filter((m) => m.role === 'user').pop()?.content ??
+      null;
+    usageRecord = recordUsage({
+      projectId: opts.projectId ?? null,
+      versionId: opts.versionId ?? null,
+      provider: 'openai',
+      model,
+      inputTokens: usage.prompt_tokens ?? 0,
+      outputTokens: usage.completion_tokens ?? 0,
+      requestType: 'chat',
+      prompt: lastUserContent ? lastUserContent.slice(0, 500) : null,
+      responseSummary: raw.slice(0, 200),
+    });
+  }
+
+  let response: ChatTurnResponse;
+  try {
+    response = buildResponse(raw, usageRecord, usage);
+  } catch (err) {
+    yield {
+      type: 'error',
+      message: `Could not parse model output: ${(err as Error).message}`,
+    };
+    return;
+  }
+  yield { type: 'done', response };
 }

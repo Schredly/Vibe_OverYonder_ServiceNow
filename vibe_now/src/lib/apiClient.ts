@@ -22,10 +22,17 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  // Only send Content-Type when there's a body to type. Fastify rejects
+  // requests that declare `Content-Type: application/json` but ship an
+  // empty body with HTTP 400 ("Bad Request") — that hits us on
+  // bodyless DELETE / POST calls (e.g. /api/aliases/:id).
+  const baseHeaders: Record<string, string> = init?.body
+    ? { 'Content-Type': 'application/json' }
+    : {};
   const res = await fetch(url(path), {
     ...init,
     headers: {
-      'Content-Type': 'application/json',
+      ...baseHeaders,
       ...(init?.headers ?? {}),
     },
   });
@@ -220,6 +227,106 @@ export async function chatTurn(payload: ChatTurnPayload): Promise<ChatTurnReply>
     );
   }
   return data as ChatTurnReply;
+}
+
+export interface ChatTurnStreamCallbacks {
+  /** Called for every incremental chunk of the agent's `message` field. */
+  onMessageDelta: (text: string) => void;
+  /** Optional — called once when the full structured response lands.
+   *  Carries `specPatch`, `readyToBuild`, and `usage`. */
+  onDone?: (response: ChatTurnReply) => void;
+  /** Optional abort signal for cancelling the stream client-side. */
+  signal?: AbortSignal;
+}
+
+/** Streaming consultant turn — POST /api/chat/turn/stream (SSE). Resolves
+ *  with the full ChatTurnReply once the model has finished. Use the
+ *  callbacks to render the message field as it arrives token-by-token.
+ *  See vibe_now_api/src/lib/chatTurn.ts#streamChatTurn for the wire
+ *  format. */
+export async function streamChatTurn(
+  payload: ChatTurnPayload,
+  callbacks: ChatTurnStreamCallbacks,
+): Promise<ChatTurnReply> {
+  const res = await fetch(url('/api/chat/turn/stream'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: safeStringify(payload),
+    signal: callbacks.signal,
+  });
+  if (!res.ok || !res.body) {
+    const text = await res.text().catch(() => '');
+    const data = text ? safeJson(text) : null;
+    throw new ApiError(
+      (data as { error?: string } | null)?.error ?? `HTTP ${res.status}`,
+      res.status,
+    );
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  let final: ChatTurnReply | null = null;
+  let streamError: string | null = null;
+
+  // Standard SSE framing: events are separated by a blank line. Within
+  // an event, each field starts with a name + `:`. We only emit `data:`
+  // here (no event/id/retry), so a frame is always 1+ data lines, then
+  // a blank line.
+  const handleFrame = (frame: string): void => {
+    const lines = frame.split('\n');
+    let dataLine = '';
+    for (const line of lines) {
+      if (line.startsWith('data:')) dataLine += line.slice(5).trimStart();
+      else if (line.startsWith(': ')) {
+        // heartbeat — ignore
+      }
+    }
+    if (!dataLine) return;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(dataLine);
+    } catch {
+      return;
+    }
+    const event = parsed as
+      | { type: 'message-delta'; text: string }
+      | { type: 'done'; response: ChatTurnReply }
+      | { type: 'error'; message: string };
+    if (event.type === 'message-delta') {
+      callbacks.onMessageDelta(event.text);
+    } else if (event.type === 'done') {
+      final = event.response;
+      callbacks.onDone?.(event.response);
+    } else if (event.type === 'error') {
+      streamError = event.message;
+    }
+  };
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let idx = buf.indexOf('\n\n');
+      while (idx !== -1) {
+        handleFrame(buf.slice(0, idx));
+        buf = buf.slice(idx + 2);
+        idx = buf.indexOf('\n\n');
+      }
+    }
+    if (buf.trim()) handleFrame(buf);
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  if (streamError) throw new ApiError(streamError, 500);
+  if (!final) throw new ApiError('Stream ended without a done event', 500);
+  return final;
 }
 
 // Mirrors vibe_now_api/src/lib/specExtractor.ts#ExtractedSpec.

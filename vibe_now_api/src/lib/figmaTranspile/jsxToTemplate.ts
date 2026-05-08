@@ -93,10 +93,20 @@ function escapeAttr(s: string): string {
 }
 
 // React onClick handler attribute → AngularJS ng-click directive name.
+// React event handlers → AngularJS directives. **Critical**: do not map
+// onChange/onInput to ng-change. AngularJS's ng-change directive
+// `require`s a sibling ng-model on the same element; without it the
+// `$compile:ctreq` error fires and AngularJS halts compilation of the
+// ENTIRE subtree, leaving large parts of the page unbound (i.e. blank).
+// The Figma Make output has many <input onChange={…}> elements that
+// don't carry an explicit `value` (the prop comes through props.value
+// from a parent), so we can't reliably auto-pair an ng-model. Park the
+// handler on a data-* instead — the deployed widget's clientScript can
+// wire it up later if/when we add real two-way binding.
 const EVENT_TO_NG: Record<string, string> = {
   onClick: 'ng-click',
-  onChange: 'ng-change',
-  onInput: 'ng-change',
+  onChange: 'data-on-change',
+  onInput: 'data-on-input',
   onSubmit: 'ng-submit',
   onFocus: 'ng-focus',
   onBlur: 'ng-blur',
@@ -124,16 +134,40 @@ interface EmitContext {
 // Resolve an IrExpr's expression source against the substitution stack. If
 // the expression is a bare identifier matching a prop, return the prop's
 // attr value. Otherwise return undefined and the caller emits the original.
+//
+// Recurses through transitive prop forwarding: when component A inlines B
+// with `<B foo={foo}/>`, the inner `foo` resolves to A's `foo`; we keep
+// walking deeper frames so we land on whatever A's caller passed for `foo`.
+// Without this, `<App><PortalLayout onNavigate={setViewMode}>
+// <Sidebar onNavigate={onNavigate}/></PortalLayout></App>` resolves the
+// Sidebar's `onNavigate` only one hop and stops at PortalLayout's prop
+// name — never reaching `setViewMode` at the top.
+//
+// Forwarded callback props show up as `kind: 'event'` (because parseTsx
+// classifies any `on*` JSX attribute as an event), so we must also walk
+// through event-kind values whose handler is just a bare identifier.
 function resolveBareIdentifier(expr: string, ctx: EmitContext): IrAttr | undefined {
   const trimmed = expr.trim();
-  // Quick check: bare identifier (no operators, dots, parens). Allows
-  // simple names like `title`, `value`, `isSponsored`.
   if (!/^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(trimmed)) return undefined;
+  let target = trimmed;
+  let lastResolved: IrAttr | undefined;
   for (let i = ctx.substStack.length - 1; i >= 0; i -= 1) {
     const subst = ctx.substStack[i];
-    if (Object.prototype.hasOwnProperty.call(subst, trimmed)) return subst[trimmed];
+    if (!Object.prototype.hasOwnProperty.call(subst, target)) continue;
+    const value = subst[target];
+    lastResolved = value;
+    let nextSrc: string | undefined;
+    if (value.kind === 'expression') nextSrc = value.expression;
+    else if (value.kind === 'event') nextSrc = value.handler;
+    else return value; // string / spread — concrete, done
+    const next = nextSrc.trim();
+    if (!/^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(next)) return value;
+    // Bare-identifier forwarding. Keep walking; if `next === target` we still
+    // walk so transitive same-name forwarding resolves to the outermost
+    // concrete binding.
+    target = next;
   }
-  return undefined;
+  return lastResolved;
 }
 
 // Look up a local component definition from the project by name. Searches
@@ -149,6 +183,95 @@ function findLocalComponent(
   return undefined;
 }
 
+// Convert a JSX onClick/onSubmit/etc. handler into an AngularJS-evaluable
+// expression. Handles the four shapes Figma Make output produces:
+//
+//   1. Bare identifier:  `handleClick`         → `handleClick()`
+//   2. Member access:    `obj.method`          → `obj.method()`
+//   3. Inline expr arrow:`() => doX(x)`        → `doX(x)`
+//   4. Inline block arrow:                     → `S1; S2`
+//        `() => { onNavigate?.(v); close?.(); }`
+//   5. Parameterized arrow (e.g. event handlers receiving `e`):
+//        `(e) => e.stopPropagation()`          → keep as-is on data-* event
+//          (we can't evaluate without an event arg, but the user can wire
+//          it up server-side later — at minimum it's preserved). For the
+//          AngularJS-mapped events we only emit when there's no parameter.
+//
+// AngularJS 1.5+ accepts `;`-separated statements in expressions, so the
+// block-body case becomes a sequence of calls evaluated in order. Optional
+// chaining (`?.`) is supported in 1.6+ and we ship 1.8, so it survives
+// untouched.
+function unwrapHandler(rawHandler: string): string {
+  let handler = rawHandler.trim();
+
+  // Strip the outer arrow ` () => …` or ` (e) => …`. We only unwrap when the
+  // arrow takes zero parameters — handlers that need the event object can't
+  // be lifted into AngularJS expression syntax (no event in scope) and are
+  // better left raw so a custom directive can pick them up later.
+  const zeroArgArrow = handler.match(/^\(\s*\)\s*=>\s*([\s\S]+)$/);
+  if (zeroArgArrow) handler = zeroArgArrow[1].trim();
+
+  // Block body: `{ S1; S2; ... }` → `S1; S2; ...`. Statements are already
+  // semicolon-separated by the source generator. Strip a trailing semicolon
+  // for tidiness.
+  if (handler.startsWith('{') && handler.endsWith('}')) {
+    handler = handler.slice(1, -1).trim();
+    handler = handler.replace(/;\s*$/, '');
+  }
+
+  // After unwrapping, if the result is still a bare identifier or a
+  // member-access chain (no call), wrap it in a function call form.
+  // AngularJS treats `foo` as a property read, not an invocation.
+  if (/^[a-zA-Z_$][\w.$]*$/.test(handler)) handler = `${handler}()`;
+
+  return handler;
+}
+
+// Lexical substitution of bare-identifier prop refs inside an event
+// handler body or any AngularJS expression. We need this because event
+// handlers like `onNavigate?.(item.view); onMobileClose?.()` contain
+// prop-name references (`onNavigate`, `onMobileClose`) that need to
+// resolve to the caller's bindings (`setViewMode`, `setMobileSidebarOpen`)
+// — but the resolver runs only on full attr values, not on identifiers
+// embedded in larger expressions.
+//
+// Approach: scan for word-boundary identifier tokens that aren't
+// preceded by `.` (member access), `?` (optional chain selector), or a
+// digit/identifier char (in which case the regex itself wouldn't match).
+// For each candidate, look up via resolveBareIdentifier and substitute
+// the resolved expression source. JS keywords and known scope helpers
+// pass through.
+const HANDLER_KEYWORDS = new Set([
+  'true','false','null','undefined','this','new','return','if','else','for',
+  'while','var','let','const','function','class','in','typeof','void','delete',
+  'throw','try','catch','finally','switch','case','break','continue','do','with',
+  'debugger','async','await','of',
+]);
+function substituteIdentifiersInExpr(source: string, ctx: EmitContext): string {
+  if (ctx.substStack.length === 0) return source;
+  return source.replace(
+    /(^|[^\w$.?])([a-zA-Z_$][\w$]*)/g,
+    (whole, lead, ident) => {
+      if (HANDLER_KEYWORDS.has(ident)) return whole;
+      const resolved = resolveBareIdentifier(ident, ctx);
+      if (!resolved) return whole;
+      if (resolved.kind === 'expression') return lead + resolved.expression;
+      if (resolved.kind === 'string') return lead + JSON.stringify(resolved.value);
+      if (resolved.kind === 'event') {
+        // The bare identifier appears as `propName?.()` / `propName(args)`
+        // in the surrounding handler. If the resolved value is a zero-arg
+        // arrow `() => EXPR`, splice in just EXPR — the surrounding `?.()`
+        // then short-circuits on EXPR's return value (typically undefined),
+        // so the side-effect fires once and AngularJS doesn't choke on
+        // arrow syntax (which it can't parse).
+        const arrow = resolved.handler.match(/^\(\s*\)\s*=>\s*([\s\S]+)$/);
+        return lead + (arrow ? arrow[1].trim() : resolved.handler);
+      }
+      return whole;
+    },
+  );
+}
+
 // --- Attribute emission -----------------------------------------------------
 
 function emitAttr(attr: IrAttr, ctx: EmitContext): string {
@@ -159,14 +282,8 @@ function emitAttr(attr: IrAttr, ctx: EmitContext): string {
   }
   if (attr.kind === 'event') {
     const ngName = EVENT_TO_NG[attr.name] ?? `data-event-${attr.name.toLowerCase()}`;
-    // Wrap inline arrows / member calls in a function-call form. Bare
-    // identifiers stay as-is so AngularJS can resolve them on the scope.
-    let handler = attr.handler.trim();
-    // Strip outer parentheses from arrow expressions: `() => doX()` → `doX()`
-    const arrow = handler.match(/^\(\)\s*=>\s*(.+)$/);
-    if (arrow) handler = arrow[1].trim();
-    // Bare identifier handler like `c.adopt` → wrap in function call form
-    if (/^[a-zA-Z_$][\w.$]*$/.test(handler)) handler = `${handler}()`;
+    let handler = unwrapHandler(attr.handler);
+    handler = substituteIdentifiersInExpr(handler, ctx);
     return ` ${ngName}="${escapeAttr(handler)}"`;
   }
   // String value — direct pass-through with HTML escaping.
@@ -208,6 +325,17 @@ function emitAttr(attr: IrAttr, ctx: EmitContext): string {
     if (isAngularSafeExpression(attr.expression)) {
       return ` ${name}="{{ ${attr.expression} }}"`;
     }
+    // Template-literal attr — convert `` `static ${expr} static` `` into
+    // AngularJS class-interpolation `class="static {{ expr }} static"`.
+    // This is the workhorse case: every Figma Make export uses dynamic
+    // className strings (Tailwind classes flipped on isCollapsed,
+    // isActive, isMobileOpen, etc.). Without this conversion, every
+    // such element loses its `class` attr entirely and the layout
+    // collapses to a styleless skeleton.
+    const interpolated = templateLiteralToInterpolation(attr.expression);
+    if (interpolated !== null) {
+      return ` ${name}="${escapeAttr(interpolated)}"`;
+    }
     // JSX-literal / non-AngularJS expression. Emitting it as `{{...}}` would
     // leave AngularJS unable to evaluate it and render the raw braces as
     // text. Stash on a data-attribute instead so the dev-time warning
@@ -215,6 +343,65 @@ function emitAttr(attr: IrAttr, ctx: EmitContext): string {
     return ` data-${name}-jsx="${escapeAttr(snippet(attr.expression))}"`;
   }
   return '';
+}
+
+// Convert a JS template-literal source like `` `flex-1 ${isCollapsed ? 'lg:ml-20' : 'lg:ml-64'}` ``
+// to an AngularJS interpolation string like `flex-1 {{ isCollapsed ? 'lg:ml-20' : 'lg:ml-64' }}`.
+// Returns null when the input isn't a template literal or contains a
+// nested template literal we can't safely inline (rare; falls back to
+// the data-* attribute path).
+//
+// Why this is the right shape: AngularJS's `class="..."` attribute
+// supports embedded `{{ }}` expressions natively — they re-evaluate when
+// scope changes, which is exactly the React-template-literal semantic.
+function templateLiteralToInterpolation(source: string): string | null {
+  const s = source.trim();
+  if (!s.startsWith('`') || !s.endsWith('`') || s.length < 2) return null;
+  const inner = s.slice(1, -1);
+  let out = '';
+  let i = 0;
+  while (i < inner.length) {
+    const ch = inner[i];
+    if (ch === '\\' && i + 1 < inner.length) {
+      // Template-literal escape — collapse `\\``→``, `\\$`→`$`, `\\\\`→`\\`.
+      const next = inner[i + 1];
+      out += next === '`' || next === '$' || next === '\\' ? next : ch + next;
+      i += 2;
+      continue;
+    }
+    if (ch === '$' && inner[i + 1] === '{') {
+      // Find matching `}`, tracking brace depth so `${a ? {x:1} : null}` works.
+      let depth = 1;
+      let j = i + 2;
+      while (j < inner.length && depth > 0) {
+        const cj = inner[j];
+        if (cj === '{') depth++;
+        else if (cj === '}') depth--;
+        if (depth > 0) j++;
+      }
+      if (depth !== 0) return null;
+      const expr = inner.slice(i + 2, j).trim();
+      // Nested template literal inside the expression — punt. Could be
+      // handled recursively but the cases that matter (Tailwind class
+      // toggling) never nest in practice.
+      if (expr.includes('`')) return null;
+      // The expression must be safely AngularJS-evaluable. Reject ones
+      // with raw JSX (`<Foo`) just like isAngularSafeExpression does.
+      if (/<[A-Za-z]|<\/|<>/.test(expr)) return null;
+      // Collapse internal whitespace so the resulting class string is
+      // tidy and so inline arrows like `() => x` render predictably.
+      const flat = expr.replace(/\s+/g, ' ');
+      out += `{{ ${flat} }}`;
+      i = j + 1;
+      continue;
+    }
+    out += ch;
+    i++;
+  }
+  // Collapse runs of whitespace introduced by source-level newlines in
+  // the template literal — the original CSS-class-list semantic doesn't
+  // care, and tidy HTML helps inspecting in DevTools.
+  return out.replace(/\s+/g, ' ').trim();
 }
 
 // "AngularJS-safe" = expression contains no JSX (`<` outside of comparisons)
@@ -271,26 +458,29 @@ export function emitProject(project: IrProject): EmitResult {
   }
   const body = emitNodes(root.component.body, ctx);
 
-  // ng-init seed — populates the AngularJS scope with the user's
-  // useState initials + literal bindings + top-level literals BEFORE the
-  // body renders. Without this, every {{editingAddress}}, {{addressForm.x}},
-  // {{currentStep}} etc. renders as literal text because AngularJS has no
-  // scope binding for those names. This is what the user saw on 2026-04-29
-  // when the deployed Service Portal showed `{{ addressForm.street }}`
-  // labels in a modal.
+  // Note: scope seeding does NOT happen via an `ng-init` here. AngularJS's
+  // expression parser is a strict subset of JavaScript that can't evaluate
+  // `new Date(...)`, regex literals, function calls with `function`/`async`,
+  // bitwise ops, etc. — and the seeds we extract from React source
+  // routinely contain `new Date(Date.now() - …).toISOString()` in mock
+  // data. A single bad token in `ng-init` makes $parse throw, which
+  // halts compilation of the subtree and leaves the entire scope
+  // unbound. We saw this concretely on 2026-05-07 with the FraudSight
+  // export: `viewMode='dashboard'` was a few characters away from
+  // `new Date(...)` in the same ng-init, so the dashboard branch
+  // never rendered even though viewMode would have evaluated cleanly
+  // on its own.
   //
-  // The seed lives on a hidden <span> at the top of the wrapper rather
-  // than on the wrapper itself so the iframe preview's wrapper-stripping
-  // doesn't lose it. AngularJS evaluates ng-init at link time on the
-  // enclosing controller's scope — works identically in the preview
-  // iframe and the deployed widget.
-  const initSeed = buildScopeSeed(project);
-  const seedNode = initSeed
-    ? `<span ng-init="${escapeAttr(initSeed)}" style="display:none"></span>\n`
-    : '';
+  // Both real seeding paths use real JavaScript where `new Date()` is fine:
+  //   - Preview iframe: VibeCtrl controller does `Object.assign($scope, SEEDS)`
+  //     in `routes/figma.ts#buildPreviewBundle`.
+  //   - Deployed Service Portal: the widget's clientScript assigns
+  //     `$scope.<name>` directly (see fluentGen's figmaWidgetClient).
+  // Both consume `extractScopeSeeds(project)`, so the seed list is
+  // identical between contexts; only the *evaluation runtime* differs.
 
   // Wrap in a single root container so AngularJS has one element to bind.
-  const html = `<div class="vibe-figma-root">\n${seedNode}${body}\n</div>\n`;
+  const html = `<div class="vibe-figma-root">\n${body}\n</div>\n`;
   return { html, warnings: ctx.warnings };
 }
 
@@ -353,17 +543,38 @@ function buildScopeSeed(project: IrProject): string {
   return seeds.map((s) => `${s.name}=${s.expr}`).join('; ');
 }
 
-// Conservative gate — AngularJS expressions don't parse JSX (`<X/>`) or
-// template literals (`` `${x}` ``). Bare object/array literals, numbers,
-// strings, and member access all parse fine. False positives only mean
-// a value gets seeded as null instead of its real initial — far better
-// than blowing up the entire ng-init evaluation and leaving every {{ }}
-// in the document unbound.
+// Conservative gate — AngularJS expressions are a *restricted* subset of
+// JavaScript. The whole `ng-init` evaluates atomically: a single bad token
+// (`new Date(…)` is the canonical offender, but also `function` decls,
+// regex literals, `void`/`typeof`/`instanceof`, the comma operator, bitwise
+// ops, etc.) makes AngularJS's $parse throw a syntax error which
+// silently abandons EVERY seed in the same ng-init — including the
+// innocent ones. That bug surfaces as "the dashboard branch never
+// renders because viewMode is undefined" even though viewMode='dashboard'
+// is two characters away in the source. Reject anything we can't prove
+// AngularJS will accept so a single bad initializer can't poison the
+// whole scope.
 function isAngularSafeSeed(expr: string): boolean {
   const trimmed = expr.trim();
   if (trimmed.length === 0) return false;
   if (/<[A-Za-z]|<\/|<>/.test(trimmed)) return false;
   if (trimmed.includes('`')) return false;
+  // `new Foo(…)` is the most common offender — Date.now()/Math.random()
+  // tend to show up in mock-data initializers.
+  if (/\bnew\s+[A-Za-z_$]/.test(trimmed)) return false;
+  // Reserved JS keywords that AngularJS expressions also reject.
+  if (/\b(function|class|throw|delete|void|typeof|instanceof|in|yield|async|await|do|while|for|switch|try|catch|finally|return|var|let|const|debugger|export|import)\b/.test(
+    trimmed,
+  )) return false;
+  // Regex literals — syntactically distinguishable from division because
+  // they appear after `=`, `(`, `,`, `[`, etc. We don't try to be precise;
+  // just reject anything that looks like /…/flags.
+  if (/[=(,\[\s]\/[^/\n*][^\n]*\/[gimsuy]*[\s,)\]]/.test(' ' + trimmed + ' ')) return false;
+  // Bitwise operators (& | ^ ~ << >>) and comma-operator are out.
+  // Bitwise & is rare enough to reject wholesale; AngularJS DOES support
+  // logical && so we have to distinguish: only reject `&` not followed
+  // by another `&`, etc.
+  if (/[^&]&[^&]|[^|]\|[^|]|\^|~|<<|>>/.test(trimmed)) return false;
   return true;
 }
 
@@ -414,9 +625,18 @@ function emitFragment(node: IrFragment, ctx: EmitContext): string {
 }
 
 function emitIf(node: IrIf, ctx: EmitContext): string {
-  // We need a wrapping element to attach ng-if. If there's exactly one child
-  // and it's an element/component, attach ng-if directly. Otherwise wrap in
-  // an inline span (preserves the layout container as-was).
+  // We need a wrapping element to attach ng-if. If there's exactly one
+  // child and it's an element, attach ng-if directly to that element so
+  // we don't add an extra layer of nesting. Otherwise wrap in a div.
+  //
+  // **Why div, not span**: when the conditional content contains block
+  // elements (which is true for any non-trivial branch — sidebar +
+  // header + main, or the per-screen wrappers in a multi-view App.tsx),
+  // a `<span>` host gets auto-closed by the HTML parser the moment it
+  // sees the first `<div>/<header>/<main>` child. The ng-if directive
+  // then ends up on an empty <span>, the real content becomes a sibling
+  // with no conditional, and the entire view structure is silently
+  // wrong. A `<div>` is content-model-safe for everything we wrap.
   const thenChildren = node.then;
   const elseChildren = node.else ?? [];
   const renderBranch = (children: IrNode[], ngIfExpr: string): string => {
@@ -426,13 +646,12 @@ function emitIf(node: IrIf, ctx: EmitContext): string {
         return injectAttrToElement(sole, `ng-if`, ngIfExpr, ctx);
       }
       if (sole.kind === 'component') {
-        // Wrap in span — components are inline-expanded later.
         const inner = emitNode(sole, ctx);
-        return `<span ng-if="${escapeAttr(ngIfExpr)}">${inner}</span>`;
+        return `<div ng-if="${escapeAttr(ngIfExpr)}">${inner}</div>`;
       }
     }
     const inner = emitNodes(children, ctx);
-    return `<span ng-if="${escapeAttr(ngIfExpr)}">${inner}</span>`;
+    return `<div ng-if="${escapeAttr(ngIfExpr)}">${inner}</div>`;
   };
 
   let out = renderBranch(thenChildren, node.condition);
@@ -469,15 +688,17 @@ function emitFor(node: IrFor, ctx: EmitContext): string {
   }
   if (node.children.length === 1 && node.children[0].kind === 'component') {
     // Inline-expand and then attach ng-repeat to the resulting wrapper.
+    // Use a div for the same reason as emitIf — the inlined component
+    // body is usually block-level, which would auto-close a span.
     const inner = emitNode(node.children[0], ctx);
     let repeatExpr = `${node.itemName} in ${node.iterable}`;
     if (node.keyExpression) repeatExpr += ` track by ${node.keyExpression}`;
-    return `<span ng-repeat="${escapeAttr(repeatExpr)}">${inner}</span>`;
+    return `<div ng-repeat="${escapeAttr(repeatExpr)}">${inner}</div>`;
   }
   const inner = emitNodes(node.children, ctx);
   let repeatExpr = `${node.itemName} in ${node.iterable}`;
   if (node.keyExpression) repeatExpr += ` track by ${node.keyExpression}`;
-  return `<span ng-repeat="${escapeAttr(repeatExpr)}">${inner}</span>`;
+  return `<div ng-repeat="${escapeAttr(repeatExpr)}">${inner}</div>`;
 }
 
 function emitElement(

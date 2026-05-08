@@ -163,15 +163,17 @@ export async function extractSpecFromText(
       'No OpenAI key configured. Open Settings → LLM Provider in the app to add one, or set OPENAI_API_KEY in vibe_now_api/.env.',
     );
   }
-  const model = opts.model ?? process.env.OPENAI_MODEL ?? 'gpt-5';
-  // PRD extraction can take 60–120s on long docs (GPT-5 generates a full
-  // structured payload). Be patient on the first try, retry transient
-  // failures up to 3× — the SDK's default 2 retries inside ~10s of total
-  // budget aren't long enough for cold-start cases.
+  // Default to gpt-5-mini with low reasoning_effort for spec extraction.
+  // Doc → structured spec is a relatively mechanical transformation, not
+  // analytical reasoning — flagship gpt-5 with default reasoning was
+  // taking 60–120s; mini with low effort lands in 15–30s on the same
+  // input. opts.model + OPENAI_MODEL env still let users opt back in.
+  const model = opts.model ?? process.env.OPENAI_MODEL ?? 'gpt-5-mini';
   const client = new OpenAI({ apiKey, maxRetries: 3, timeout: 180_000 });
 
   const completion = await client.chat.completions.create({
     model,
+    ...(/^(o\d|gpt-5)/i.test(model) ? { reasoning_effort: 'low' as const } : {}),
     messages: [
       { role: 'system', content: SYSTEM_PROMPT },
       {
