@@ -24,12 +24,33 @@ export interface LlmCredentialDTO {
   updatedAt: string;
 }
 
+// Env-var fallback per provider. Mirrors resolveProviderKey() so the
+// credentials list reports hasKey:true when a teammate has the matching
+// env var set, even if they never saved a key through the Settings UI.
+// Without this, the frontend's `llmReady` probe (hasLlmKeyOnFile) returns
+// false on fresh clones and the consultant silently degrades to the
+// scripted blueprints in assistantBehavior.ts.
+function envKeyFor(provider: string): string | null {
+  switch (provider) {
+    case 'openai':
+      return process.env.OPENAI_API_KEY ?? null;
+    case 'anthropic':
+      return process.env.ANTHROPIC_API_KEY ?? null;
+    case 'google':
+      return process.env.GOOGLE_API_KEY ?? null;
+    case 'groq':
+      return process.env.GROQ_API_KEY ?? null;
+    default:
+      return null;
+  }
+}
+
 export function toDTO(row: LlmCredentialRow): LlmCredentialDTO {
   return {
     provider: row.provider,
     model: row.model,
     baseUrl: row.base_url ?? undefined,
-    hasKey: !!row.api_key_enc,
+    hasKey: !!row.api_key_enc || !!envKeyFor(row.provider),
     updatedAt: row.updated_at,
   };
 }
@@ -43,11 +64,37 @@ export interface UpsertCredentialInput {
   apiKey?: string | null;
 }
 
+// Default model per provider when we synthesize an env-only credential row.
+// Matches the defaults used by the chat-turn and spec-extract call sites.
+const DEFAULT_MODEL_BY_PROVIDER: Record<string, string> = {
+  openai: 'gpt-5-mini',
+  anthropic: 'claude-opus-4-7',
+  google: 'gemini-2.5-pro',
+  groq: 'llama-3.3-70b-versatile',
+};
+
 export function listCredentials(): LlmCredentialDTO[] {
   const rows = getDb()
     .prepare(`SELECT * FROM llm_credentials ORDER BY provider`)
     .all() as LlmCredentialRow[];
-  return rows.map(toDTO);
+  const dtos = rows.map(toDTO);
+  // Surface env-backed providers that don't yet have a DB row. Without this
+  // a teammate who only set OPENAI_API_KEY in .env still gets an empty
+  // credentials list, hasLlmKeyOnFile() returns false on the frontend, and
+  // the consultant silently falls back to the scripted blueprints.
+  const present = new Set(dtos.map((d) => d.provider));
+  for (const provider of Object.keys(DEFAULT_MODEL_BY_PROVIDER)) {
+    if (present.has(provider)) continue;
+    if (!envKeyFor(provider)) continue;
+    dtos.push({
+      provider,
+      model: DEFAULT_MODEL_BY_PROVIDER[provider],
+      baseUrl: undefined,
+      hasKey: true,
+      updatedAt: new Date(0).toISOString(),
+    });
+  }
+  return dtos.sort((a, b) => a.provider.localeCompare(b.provider));
 }
 
 export function getCredential(provider: string): LlmCredentialDTO | null {
